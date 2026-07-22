@@ -52,7 +52,7 @@ picked 3종을 **서버 스캔 최소화** 기준으로 2개 named analysis에 �
 ### 공통 파라미터
 - `window`: `(start, end)` 날짜 경계
 - `grain`: `{day, week, month}`, 기본 `day`. `date_trunc(grain, access_time)`로 period 버킷.
-- `breakdown[]`: `⊆ {app_version, os, service_code}`, 기본 없음(전체 합계). 요구된 앱버전 분리는 `breakdown=["app_version"]`.
+- `breakdown[]`: `⊆ {app_version, os, service_code}`, 기본 없음(전체 합계). 요구된 앱버전 분리는 `breakdown=["app_version"]`. **period는 항상 포함되는 1차 축이며, breakdown은 그 위에 얹는 추가 축이다**(breakdown 화이트리스트에 period는 포함되지 않음 — grain이 담당).
 - `filters{}`: 화이트리스트 컬럼에 대한 단순 동등/IN 필터(선택).
 
 ### 비가산성 규칙 (correctness)
