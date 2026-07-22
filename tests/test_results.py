@@ -62,3 +62,22 @@ def test_list_results_filters_by_run(config):
     publish_result(config, run_id="runB", analysis_type="t2", title="b", **common)
     assert {r["run_id"] for r in list_results(config)} == {"runA", "runB"}
     assert len(list_results(config, run_id="runA")) == 1
+
+
+import data_layer
+
+
+def test_public_api_roundtrip(config):
+    rid = data_layer.publish_result(
+        config, run_id="run1", skill="markov", analysis_type="transition_matrix",
+        title="t", data=_data(),
+        viz={"chart_type": "heatmap", "encoding": {"x": "from_state", "y": "to_state", "value": "p"}},
+        params={"seed": 7},
+        config_version=data_layer.config_version({"cutoff": 0.95}, {"timeout_min": 30}),
+        created_at="t0",
+    )
+    listed = data_layer.list_results(config, run_id="run1")
+    assert len(listed) == 1 and listed[0]["id"] == rid
+    df, env = data_layer.read_result(config, rid)
+    assert len(df) == 3 and env["viz"]["chart_type"] == "heatmap"
+    assert len(env["config_version"]) == 16
