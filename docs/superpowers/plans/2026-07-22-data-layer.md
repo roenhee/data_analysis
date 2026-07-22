@@ -1667,6 +1667,15 @@ git commit -m "feat: expose public API and add gated Trino integration tests"
 - **config 아티팩트 로딩**: `sources.json`/`dictionary.vN.json` 예시 파일은 실제 소스 확정 후 `cache/config/`에 둔다(레포에 자격증명 없이). `Config`는 경로만 알고, 내용 로딩은 `load_sources`/사전 로더가 담당.
 - **markov 마이그레이션**: 이 레이어가 서면 markov 노트북의 Phase 2 계산(상태매핑·전이·markov)을 서브프로젝트 ②에서 이 API 위에 얹는다. 본 계획 범위 밖.
 
+### 명시적 deferred (스펙에 표면은 있으나 이 딜리버리에서 코드 없음 — 최종 리뷰 확인)
+
+아래 3개는 스펙에 이름이 있으나 이번 오프라인 기반 딜리버리에는 구현하지 않았다. 되돌리기 어려운 기반 결정이 아니라 나중에 얹으면 되는 additive 표면이며, 대부분 실 Trino 서버 I/O를 필요로 해 통합 단계(또는 ②)로 미룬다. **완료된 것으로 오해하지 말 것.**
+
+- **`query.run(target="server")`**: 현재 `query.run`은 로컬 DuckDB 전용이다. 무거운 서버 축소는 지금은 `fetch.partition_fetcher` / `profile.counts_fetcher` seam으로만 표현된다. 서버 실행+결과 캐시 경로가 필요해지면 `query.run`에 `target` 파라미터와 서버 실행 분기를 추가한다(실 Trino 통합 시).
+- **`enrich.get_dim` + 차원 캐시**: 로컬 조인(`enrich.join_dim`)은 구현됨. 차원 소스를 유저 키로 fetch·캐시하는 `get_dim`은 미구현이며, 그때 `Manifest.add_dim`(현재 호출처 없음)이 쓰인다. 서버 fetcher를 요하므로 통합 단계로 미룬다.
+- **매니페스트 top-level `config` 섹션 채우기**: `manifest.data["config"]`(dictionary/sessionization/sources 버전)은 스키마만 있고 아무도 쓰지 않는다(항상 `{}`). config 아티팩트 로딩(위 "config 아티팩트 로딩" 노트)과 함께 채운다. 참고: per-result `config_version`은 `query.run`이 이미 기록한다.
+- (Minor) 검열: `window_bounds`는 기록하나 open/closed 플래그는 미기록 — 실 fetcher가 세션 open/closed를 판정할 수 있을 때 추가.
+
 ---
 
 ## Self-Review (작성자 체크 결과)
