@@ -1,5 +1,8 @@
-def test_package_imports():
-    import data_layer  # noqa: F401
+def test_package_exports():
+    import data_layer
+
+    for name in ("Config", "get_events", "run", "SourceDef", "build_dictionary"):
+        assert hasattr(data_layer, name)
 
 
 from data_layer.util import content_hash, day_strings
