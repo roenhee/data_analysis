@@ -31,6 +31,14 @@ class Manifest:
     def event_start_days(self) -> set[str]:
         return {e["start_day"] for e in self.data["events"]}
 
+    def has_event(self, source_id: str, start_day: str, source_query_hash: str) -> bool:
+        return any(
+            e["start_day"] == start_day
+            and e["source_id"] == source_id
+            and e["source_query_hash"] == source_query_hash
+            for e in self.data["events"]
+        )
+
     def add_event_partition(
         self,
         start_day: str,
@@ -43,7 +51,8 @@ class Manifest:
         window_bounds: list,
     ) -> None:
         self.data["events"] = [
-            e for e in self.data["events"] if e["start_day"] != start_day
+            e for e in self.data["events"]
+            if not (e["start_day"] == start_day and e["source_id"] == source_id)
         ]
         self.data["events"].append(
             {

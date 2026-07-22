@@ -12,12 +12,13 @@ def missing_start_days(existing: set[str], start: str, end: str) -> list[str]:
     return [d for d in day_strings(start, end) if d not in existing]
 
 
-def _partition_path(config: Config, start_day: str):
-    return config.events_dir / f"start_day={start_day}.parquet"
+def _partition_path(config: Config, source_id: str, start_day: str):
+    return config.events_dir / source_id / f"start_day={start_day}.parquet"
 
 
-def read_partitions(config: Config, days: list[str]) -> pd.DataFrame:
-    paths = [str(_partition_path(config, d)) for d in days if _partition_path(config, d).exists()]
+def read_partitions(config: Config, source_id: str, days: list[str]) -> pd.DataFrame:
+    candidates = (_partition_path(config, source_id, d) for d in days)
+    paths = [str(p) for p in candidates if p.exists()]
     if not paths:
         return pd.DataFrame()
     con = duckdb.connect()
@@ -46,12 +47,16 @@ def get_events(
     """
     config.ensure_dirs()
     m = Manifest.load(config.manifest_path)
-    existing = set() if refresh else m.event_start_days()
+    existing = set() if refresh else {
+        d for d in day_strings(start, end)
+        if m.has_event(source_id, d, content_hash(source_version, d, sample))
+    }
     to_fetch = missing_start_days(existing, start, end)
 
     for day in to_fetch:
         df = partition_fetcher(day)
-        path = _partition_path(config, day)
+        path = _partition_path(config, source_id, day)
+        path.parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(path)
         m.add_event_partition(
             start_day=day,
@@ -63,7 +68,6 @@ def get_events(
             sample=sample,
             window_bounds=[start, end],
         )
-    if to_fetch:
         m.save()
 
-    return read_partitions(config, day_strings(start, end))
+    return read_partitions(config, source_id, day_strings(start, end))

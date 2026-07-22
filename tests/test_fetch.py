@@ -31,11 +31,12 @@ def _partition_df(day, user):
 
 
 def test_read_partitions_unions_existing_days(config):
+    (config.events_dir / "events").mkdir(parents=True, exist_ok=True)
     for day, user in [("2026-01-05", "u1"), ("2026-01-06", "u2")]:
         _partition_df(day, user).to_parquet(
-            config.events_dir / f"start_day={day}.parquet"
+            config.events_dir / "events" / f"start_day={day}.parquet"
         )
-    df = read_partitions(config, ["2026-01-05", "2026-01-06"])
+    df = read_partitions(config, "events", ["2026-01-05", "2026-01-06"])
     assert len(df) == 4
     assert set(df["app_user_id"]) == {"u1", "u2"}
 
@@ -83,3 +84,37 @@ def test_get_events_fetches_only_missing_and_records_sample(config):
         sample={"method": "entity", "target": 1_000_000, "seed": 7},
     )
     assert calls == []
+
+
+def test_changed_source_version_refetches_same_day(config):
+    calls = []
+
+    def fetcher(start_day):
+        calls.append(start_day)
+        return _partition_df("2026-01-05", "u1")
+
+    common = dict(config=config, source_id="events", start="2026-01-05",
+                  end="2026-01-05", partition_fetcher=fetcher,
+                  sample={"method": "entity", "target": 1, "seed": 7})
+    get_events(source_version="v1", **common)
+    get_events(source_version="v1", **common)   # cache hit
+    assert calls == ["2026-01-05"]
+    get_events(source_version="v2", **common)   # version changed -> refetch
+    assert calls == ["2026-01-05", "2026-01-05"]
+
+
+def test_two_sources_do_not_collide(config):
+    def make(user):
+        def f(start_day):
+            return _partition_df("2026-01-05", user)
+        return f
+
+    common = dict(config=config, source_version="v1", start="2026-01-05",
+                  end="2026-01-05", sample={"seed": 1})
+    a = get_events(source_id="events", partition_fetcher=make("ua"), **common)
+    b = get_events(source_id="demo", partition_fetcher=make("ub"), **common)
+    assert set(a["app_user_id"]) == {"ua"}
+    assert set(b["app_user_id"]) == {"ub"}
+    # each source has its own partition dir
+    assert (config.events_dir / "events" / "start_day=2026-01-05.parquet").exists()
+    assert (config.events_dir / "demo" / "start_day=2026-01-05.parquet").exists()
