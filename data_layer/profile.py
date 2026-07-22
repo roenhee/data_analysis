@@ -22,6 +22,9 @@ def compute_dictionary(
     vocabulary: list[str] = []
     for _, row in df.iterrows():
         vocabulary.append(row["action_name"])
+        # strict `>`: an item landing exactly on the cutoff is not enough to
+        # stop — include up to the first item that *crosses* it. Do not change
+        # to `>=` (it truncates the vocabulary one item early).
         if row["cum_ratio"] > cutoff:
             break
 
