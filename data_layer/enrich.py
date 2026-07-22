@@ -10,7 +10,12 @@ def join_dim(
     key: str = "app_user_id",
     how: str = "left",
 ) -> pd.DataFrame:
-    """이벤트에 차원(유저 속성) 테이블을 로컬 DuckDB로 조인."""
+    """이벤트에 차원(유저 속성) 테이블을 로컬 DuckDB로 조인.
+
+    unmatched 값 표현이 컬럼 타입에 따라 다르다: 텍스트 컬럼은 None,
+    숫자 컬럼은 pandas `<NA>`(pd.NA)로 남는다. 결측 판정은 컬럼 타입과
+    무관하게 `pd.isna()`를 쓸 것.
+    """
     join_kw = {"left": "LEFT", "inner": "INNER"}[how]
     con = duckdb.connect()
     try:
