@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from data_layer.sources import SourceDef
 from data_layer.trino_fetcher import TrinoEventFetcher
@@ -77,3 +78,56 @@ def test_drop_runs_even_on_exception():
     except RuntimeError:
         pass
     assert any(s.startswith("DROP TABLE IF EXISTS") for s in conn.log)
+
+
+class DropFailsConn:
+    """FakeConn whose DROP execute raises; partition SELECT works."""
+    def __init__(self):
+        self.log = []
+
+    def cursor(self):
+        conn = self
+
+        class Cur:
+            def execute(self, sql):
+                conn.log.append(sql)
+                if sql.startswith("DROP TABLE"):
+                    raise RuntimeError("drop failed")
+                if "start_day = DATE" in sql:
+                    self._desc = [("app_user_id",), ("isuid",), ("start_day",)]
+                    self._rows = [("u1", "s1", "2026-01-06")]
+                else:
+                    self._desc = None
+                    self._rows = []
+
+            @property
+            def description(self):
+                return self._desc
+
+            def fetchall(self):
+                return self._rows
+
+        return Cur()
+
+
+def test_exit_swallows_drop_failure_without_raising():
+    conn = DropFailsConn()
+    with TrinoEventFetcher(
+        source=_src(), conn=conn, write_schema="hadoop_rabbit_iceberg.axz_da",
+        window=("2026-01-05", "2026-02-01"), seed=1, target_rows=10, table_prefix="roen_dl",
+    ) as tf:
+        tf.partition("2026-01-06")
+    # exiting normally must NOT raise even though DROP failed
+    assert any(s.startswith("DROP TABLE") for s in conn.log)
+
+
+def test_drop_failure_does_not_mask_original_exception():
+    conn = DropFailsConn()
+    with pytest.raises(ValueError, match="original"):
+        with TrinoEventFetcher(
+            source=_src(), conn=conn, write_schema="hadoop_rabbit_iceberg.axz_da",
+            window=("2026-01-05", "2026-02-01"), seed=1, target_rows=10, table_prefix="roen_dl",
+        ) as tf:
+            tf.partition("2026-01-06")
+            raise ValueError("original")
+    # the ValueError (not the DROP RuntimeError) propagated

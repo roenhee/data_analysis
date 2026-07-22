@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 
 from data_layer.sources import SourceDef
 from data_layer.sql_builder import build_partition_sql, build_prepare_sql
 from data_layer.util import content_hash
+
+logger = logging.getLogger(__name__)
 
 
 class TrinoEventFetcher:
@@ -12,6 +16,7 @@ class TrinoEventFetcher:
 
     `.partition(day)`를 data_layer.fetch.get_events의 partition_fetcher로 넘긴다.
     prepare는 첫 partition 호출 시 1회 지연 실행된다.
+    단일 `with` 블록에서 1회만 사용한다 (인스턴스를 여러 `with`에 재사용하지 말 것).
     """
 
     def __init__(
@@ -39,8 +44,14 @@ class TrinoEventFetcher:
 
     def __exit__(self, exc_type, exc, tb) -> bool:
         if self._prepared:
-            cur = self.conn.cursor()
-            cur.execute(f"DROP TABLE IF EXISTS {self.temp_table}")
+            try:
+                self.conn.cursor().execute(f"DROP TABLE IF EXISTS {self.temp_table}")
+            except Exception as drop_err:  # best-effort; never mask the original exception
+                logger.warning(
+                    "Failed to drop temp table %s: %s. It may be orphaned on the "
+                    "server; run cleanup.drop_temp_tables to sweep it.",
+                    self.temp_table, drop_err,
+                )
         return False
 
     def _prepare(self) -> None:
