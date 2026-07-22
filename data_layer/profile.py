@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from data_layer.sql_builder import build_action_counts_sql
+
 
 def compute_dictionary(
     counts: pd.DataFrame,
@@ -63,15 +65,7 @@ def fetch_action_counts(source, window: tuple[str, str]) -> pd.DataFrame:
     """실 Trino에서 기간 내 action_name 카운트만 집계 (Phase 0, 가벼움)."""
     from data_layer.connection import connect
 
-    start, end = window
-    full_table = f"{source.catalog}.{source.schema}.{source.table}"
-    sql = f"""
-        SELECT action.name AS action_name, COUNT(*) AS cnt
-        FROM {full_table}
-        WHERE date.day BETWEEN '{start}' AND '{end}'
-        GROUP BY action.name
-        ORDER BY cnt DESC
-    """
+    sql = build_action_counts_sql(source, window)
     conn = connect(source)
     try:
         cur = conn.cursor()
