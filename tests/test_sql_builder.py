@@ -58,3 +58,17 @@ def test_action_counts_sql():
     assert "action.name AS action_name" in sql
     assert "COUNT(*)" in sql
     assert "GROUP BY" in sql
+
+
+def test_start_day_is_date_typed_consistent_with_partition_filter():
+    src = _src()
+    prep = build_prepare_sql(
+        src, temp_table="cat.sch.t_sampled",
+        window=("2026-01-05", "2026-02-01"), seed=1, target_rows=100,
+    )
+    # start_day must be a DATE column (not cast to varchar), so it can be
+    # compared against the DATE literal used by build_partition_sql.
+    assert "AS varchar) AS start_day" not in prep
+    assert "date(min(_access_ts)) AS start_day" in prep
+    part = build_partition_sql("cat.sch.t_sampled", "2026-01-06")
+    assert "start_day = DATE '2026-01-06'" in part

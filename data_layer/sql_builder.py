@@ -30,6 +30,13 @@ def build_prepare_sql(
     seed: int,
     target_rows: int,
 ) -> str:
+    """Build the CREATE OR REPLACE TABLE ... AS sampling SQL.
+
+    Assumes a Tiara-shaped SourceDef: `source.column_map` must contain
+    `access_time`, `app_user_id`, and `isuid`, and the window bound /
+    `_access_ts` hardcode the `common.access_time` expression — this
+    builder is not fully generic across arbitrary sources.
+    """
     start, end = window
     cols = _select_columns(source)
     where = _where_clause(
@@ -53,7 +60,7 @@ base2 AS (
 session_meta AS (
     SELECT app_user_id, isuid,
         date_trunc('hour', min(_access_ts)) AS session_start_hour,
-        CAST(date(min(_access_ts)) AS varchar) AS start_day,
+        date(min(_access_ts)) AS start_day,
         count(*) AS session_rows
     FROM base2 GROUP BY 1,2
 ),
