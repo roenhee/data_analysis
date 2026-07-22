@@ -18,7 +18,7 @@ class Manifest:
             data = json.loads(path.read_text())
         else:
             data = {"events": [], "dims": [], "results": [], "config": {}}
-        for key in ("events", "dims", "results"):
+        for key in ("events", "dims", "results", "published"):
             data.setdefault(key, [])
         data.setdefault("config", {})
         return cls(path, data)
@@ -102,3 +102,52 @@ class Manifest:
         self.data["dims"].append(
             {"name": name, "source_id": source_id, "key": key, "rows": rows}
         )
+
+    # --- published (스킬↔플랫폼 결과 색인) ---
+    def add_published(
+        self,
+        id: str,
+        run_id: str,
+        skill: str,
+        analysis_type: str,
+        title: str,
+        created_at: str,
+        config_version: str,
+        data_ref: str,
+        envelope_ref: str,
+    ) -> None:
+        self.data["published"] = [
+            p for p in self.data["published"] if p["id"] != id
+        ]
+        self.data["published"].append(
+            {
+                "id": id,
+                "run_id": run_id,
+                "skill": skill,
+                "analysis_type": analysis_type,
+                "title": title,
+                "created_at": created_at,
+                "config_version": config_version,
+                "data_ref": data_ref,
+                "envelope_ref": envelope_ref,
+            }
+        )
+
+    def list_published(self, run_id: str | None = None) -> list:
+        pubs = self.data["published"]
+        if run_id is not None:
+            return [p for p in pubs if p["run_id"] == run_id]
+        return list(pubs)
+
+    # --- top-level config 버전 ---
+    def set_config(
+        self,
+        dictionary_version: str,
+        sessionization_version: str,
+        sources_version: str,
+    ) -> None:
+        self.data["config"] = {
+            "dictionary_version": dictionary_version,
+            "sessionization_version": sessionization_version,
+            "sources_version": sources_version,
+        }
