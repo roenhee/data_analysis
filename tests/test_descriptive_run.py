@@ -74,6 +74,14 @@ def test_run_rejects_bad_breakdown(config):
         )
 
 
+def test_run_rejects_missing_window(config):
+    with pytest.raises(ValueError, match="window"):
+        run_analysis(
+            config, _src(), "uv_pv_by_period", params={"grain": "day"},
+            run_id="r", config_version="c", aggregate_fetcher=_fake_uv_pv,
+        )
+
+
 def _fake_session(config, source, sql):
     return pd.DataFrame(
         {"period": ["2026-01-05"], "sessions": [8], "uv": [4], "total_duration": [200.0]}
@@ -107,3 +115,10 @@ def test_run_session_engagement_handles_zero_uv(config):
     )
     df, _ = read_result(config, rid)
     assert pd.isna(df.iloc[0]["sessions_per_user"])
+    assert pd.isna(df.iloc[0]["duration_per_user"])
+    assert pd.isna(df.iloc[0]["avg_duration_per_session"])
+
+
+def test_menu_builders_shapers_stay_in_sync():
+    from skills.descriptive.run import MENU, _BUILDERS, _SHAPERS
+    assert set(MENU) == set(_BUILDERS) == set(_SHAPERS)
