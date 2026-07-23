@@ -52,13 +52,20 @@ def test_uv_pv_sql_multi_breakdown_group_by():
 
 def test_session_engagement_sql_core_pieces():
     sql = build_session_engagement_sql(_src(), ("2026-01-05", "2026-02-01"), "day", [], {})
-    assert (
-        "COUNT(DISTINCT CAST(user.app_user_id AS VARCHAR) || '|' || "
-        "CAST(user.isuid AS VARCHAR)) AS sessions"
-    ) in sql
-    assert "COUNT(DISTINCT user.app_user_id) AS uv" in sql
-    assert "SUM(try(cast(usage.duration as double))) AS total_duration" in sql
-    assert "GROUP BY 1" in sql
+    assert "WITH sess AS (" in sql
+    assert "min(try_cast(common.access_time AS timestamp)) AS t0" in sql
+    assert "max(try_cast(common.access_time AS timestamp)) AS t1" in sql
+    assert "GROUP BY user.app_user_id, user.isuid" in sql
+    assert "count(*) AS sessions" in sql
+    assert "count(DISTINCT app_user_id) AS uv" in sql
+    assert "sum(date_diff('second', t0, t1)) AS total_duration" in sql
+    assert "usage.duration" not in sql          # usage_duration 더 이상 안 씀
+
+
+def test_session_engagement_sql_breakdown_uses_first_event_value():
+    sql = build_session_engagement_sql(_src(), ("2026-01-05", "2026-02-01"), "day", ["app_version"], {})
+    assert "min_by(env.app_version, try_cast(common.access_time AS timestamp)) AS app_version" in sql
+    assert "GROUP BY 1, 2" in sql               # 바깥 집계: period + app_version
 
 
 def test_uv_is_recomputed_per_grain_not_summed():
