@@ -42,8 +42,9 @@ picked 3종을 **서버 스캔 최소화** 기준으로 2개 named analysis에 �
 
 ### `session_engagement_by_period`
 - columns: `[period, <breakdown…>, sessions, total_duration, avg_duration_per_session, sessions_per_user, duration_per_user]`
-- `sessions = COUNT(DISTINCT (app_user_id, isuid))`
-- `total_duration = SUM(usage_duration)`
+- 세션 단위로 collapse(각 이벤트를 `(app_user_id, isuid)`로 묶음). `sessions = COUNT(*)`(세션 수), `uv = COUNT(DISTINCT app_user_id)`.
+- **`total_duration` = 세션 span 합** = `SUM(date_diff('second', min(access_time), max(access_time)))` — 세션의 첫 이벤트→마지막 이벤트 경과(초). `SUM(usage_duration)` 아님(usage_duration은 일부 이벤트에만 실려 체류시간을 과소표현). ([2026-07-23 최종 리뷰 Issue 2 반영])
+- 각 세션은 **첫 이벤트 기준** period·breakdown 값에 귀속(`min_by(…, access_time)`) — 세션이 grain 경계를 넘어도 한 period에만 집계.
 - `avg_duration_per_session = total_duration / sessions`
 - `sessions_per_user = sessions / uv`  (uv = `COUNT(DISTINCT app_user_id)`)
 - `duration_per_user = total_duration / uv`
