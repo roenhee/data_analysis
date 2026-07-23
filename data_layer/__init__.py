@@ -4,6 +4,7 @@ from data_layer.config import Config
 from data_layer.connection import connect
 from data_layer.enrich import join_dim
 from data_layer.fetch import get_events
+from data_layer.fetch_aggregate import fetch_aggregate
 from data_layer.manifest import Manifest
 from data_layer.profile import build_dictionary, compute_dictionary
 from data_layer.query import run
@@ -19,6 +20,7 @@ __all__ = [
     "connect",
     "join_dim",
     "get_events",
+    "fetch_aggregate",
     "Manifest",
     "build_dictionary",
     "compute_dictionary",
