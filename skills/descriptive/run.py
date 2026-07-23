@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import pandas as pd
+
+from data_layer.config import Config
 from data_layer.fetch_aggregate import fetch_aggregate
 from data_layer.results import publish_result
+from data_layer.sources import SourceDef
 from skills.descriptive.sql import (
     BREAKDOWN_WHITELIST,
+    build_session_engagement_sql,
     build_uv_pv_sql,
 )
 
@@ -11,7 +16,7 @@ MENU = ("uv_pv_by_period", "session_engagement_by_period")
 GRAINS = ("day", "week", "month")
 
 
-def _validate(source, analysis_type, grain, breakdown, filters):
+def _validate(source: SourceDef, analysis_type: str, grain: str, breakdown: list, filters: dict) -> None:
     if analysis_type not in MENU:
         raise ValueError(f"unknown analysis_type {analysis_type!r}; valid: {list(MENU)}")
     if grain not in GRAINS:
@@ -23,7 +28,7 @@ def _validate(source, analysis_type, grain, breakdown, filters):
             raise ValueError(f"{dim!r} not mapped in source.column_map")
 
 
-def _shape_uv_pv(raw, breakdown):
+def _shape_uv_pv(raw: pd.DataFrame, breakdown: list) -> tuple[pd.DataFrame, dict]:
     viz = {
         "chart_type": "line",
         "encoding": {
@@ -35,12 +40,36 @@ def _shape_uv_pv(raw, breakdown):
     return raw, viz
 
 
-_BUILDERS = {"uv_pv_by_period": build_uv_pv_sql}
-_SHAPERS = {"uv_pv_by_period": _shape_uv_pv}
+def _shape_session_engagement(raw: pd.DataFrame, breakdown: list) -> tuple[pd.DataFrame, dict]:
+    df = raw.copy()
+    sessions, uv, dur = df["sessions"], df["uv"], df["total_duration"]
+    df["avg_duration_per_session"] = (dur / sessions).where(sessions > 0)
+    df["sessions_per_user"] = (sessions / uv).where(uv > 0)
+    df["duration_per_user"] = (dur / uv).where(uv > 0)
+    df = df.drop(columns=["uv"])
+    viz = {
+        "chart_type": "line",
+        "encoding": {
+            "x": "period",
+            "y": ["sessions", "sessions_per_user"],
+            "series": breakdown[0] if breakdown else None,
+        },
+    }
+    return df, viz
 
 
-def run_analysis(config, source, analysis_type, params, run_id, config_version,
-                 aggregate_fetcher=None):
+_BUILDERS = {
+    "uv_pv_by_period": build_uv_pv_sql,
+    "session_engagement_by_period": build_session_engagement_sql,
+}
+_SHAPERS = {
+    "uv_pv_by_period": _shape_uv_pv,
+    "session_engagement_by_period": _shape_session_engagement,
+}
+
+
+def run_analysis(config: Config, source: SourceDef, analysis_type: str, params: dict, run_id: str, config_version: str,
+                 aggregate_fetcher=None) -> str:
     """명명 지표를 파라미터로 요청받아 전수 집계 → shaping → publish_result.
 
     aggregate_fetcher(config, source, sql) -> DataFrame: 서버 fetch seam(테스트 주입).
@@ -51,7 +80,11 @@ def run_analysis(config, source, analysis_type, params, run_id, config_version,
     filters = params.get("filters", {})
     _validate(source, analysis_type, grain, breakdown, filters)
 
-    sql = _BUILDERS[analysis_type](source, params["window"], grain, breakdown, filters)
+    window = params.get("window")
+    if window is None:
+        raise ValueError("params['window'] is required")
+
+    sql = _BUILDERS[analysis_type](source, window, grain, breakdown, filters)
     raw = (aggregate_fetcher or fetch_aggregate)(config, source, sql)
 
     data, viz = _SHAPERS[analysis_type](raw, breakdown)
