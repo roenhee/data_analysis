@@ -1,9 +1,9 @@
 ---
-name: descriptive-analytics
+name: basic-analysis
 description: Use when someone wants absolute (full-population) descriptive metrics on the data_analysis project — 기간별 UV/PV (unique visitors / page views), 세션 수, 체류시간(dwell time), 유저당 세션·체류 — optionally split by app_version / os / service_code, published via the result contract for the platform to render. Not for markov/sequence or sampled analyses.
 ---
 
-# Descriptive Analytics
+# Basic Analysis
 
 ## Overview
 
