@@ -1,5 +1,5 @@
 from data_layer.sources import SourceDef
-from skills.descriptive.sql import build_uv_pv_sql
+from skills.descriptive.sql import build_uv_pv_sql, build_session_engagement_sql
 
 
 def _src():
@@ -48,3 +48,23 @@ def test_uv_pv_sql_multi_breakdown_group_by():
     assert "env.app_version AS app_version" in sql
     assert "env.os AS os" in sql
     assert "GROUP BY 1, 2, 3" in sql
+
+
+def test_session_engagement_sql_core_pieces():
+    sql = build_session_engagement_sql(_src(), ("2026-01-05", "2026-02-01"), "day", [], {})
+    assert (
+        "COUNT(DISTINCT CAST(user.app_user_id AS VARCHAR) || '|' || "
+        "CAST(user.isuid AS VARCHAR)) AS sessions"
+    ) in sql
+    assert "COUNT(DISTINCT user.app_user_id) AS uv" in sql
+    assert "SUM(try(cast(usage.duration as double))) AS total_duration" in sql
+    assert "GROUP BY 1" in sql
+
+
+def test_uv_is_recomputed_per_grain_not_summed():
+    # UV는 비가산적: 월 UV는 month grain에서 새로 COUNT(DISTINCT)해야 하며
+    # 일별 UV의 SUM이면 안 된다. 카운트 합산 회귀를 막는 가드.
+    month = build_uv_pv_sql(_src(), ("2026-01-01", "2026-03-31"), "month", [], {})
+    assert "date_trunc('month'," in month
+    assert "COUNT(DISTINCT user.app_user_id) AS uv" in month
+    assert "SUM(" not in month

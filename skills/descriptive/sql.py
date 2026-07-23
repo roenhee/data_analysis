@@ -58,3 +58,19 @@ def build_uv_pv_sql(source: SourceDef, window: tuple[str, str], grain: str, brea
         f"COUNT(*) FILTER (WHERE {at} = 'Pageview') AS pv",
     ]
     return _assemble(lines, source, window, filters, len(breakdown))
+
+
+def build_session_engagement_sql(source: SourceDef, window: tuple[str, str], grain: str, breakdown: list, filters: dict) -> str:
+    """세션 engagement 전수 집계 SQL. 세션 = (app_user_id, isuid). breakdown은 period 위 추가 축."""
+    au = _col(source, "app_user_id", "user.app_user_id")
+    isuid = _col(source, "isuid", "user.isuid")
+    dur = _col(source, "usage_duration", "try(cast(usage.duration as double))")
+    session_key = f"CAST({au} AS VARCHAR) || '|' || CAST({isuid} AS VARCHAR)"
+    lines = [
+        f"{_period_expr(source, grain)} AS period",
+        *_breakdown_selects(source, breakdown),
+        f"COUNT(DISTINCT {session_key}) AS sessions",
+        f"COUNT(DISTINCT {au}) AS uv",
+        f"SUM({dur}) AS total_duration",
+    ]
+    return _assemble(lines, source, window, filters, len(breakdown))
