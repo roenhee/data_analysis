@@ -6,7 +6,7 @@ from data_layer.skills_registry import register_skill
 DESCRIPTOR = {
     "name": "descriptive",
     "description": "on-demand 절대(전수) 기술통계: 기간별 UV/PV·세션 engagement",
-    "invocation": "run_analysis(config, source, analysis_type, params, run_id, config_version)",
+    "invocation": "run_analysis(config, source, analysis_type, params, run_id, config_version, aggregate_fetcher=None); params={window,grain,breakdown,filters}; 사용법은 skill 'descriptive-analytics'",
     "expected_params": {
         "analysis_type": ["uv_pv_by_period", "session_engagement_by_period"],
         "window": "[start, end]",
