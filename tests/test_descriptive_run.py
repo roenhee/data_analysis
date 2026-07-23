@@ -122,3 +122,42 @@ def test_run_session_engagement_handles_zero_uv(config):
 def test_menu_builders_shapers_stay_in_sync():
     from skills.descriptive.run import MENU, _BUILDERS, _SHAPERS
     assert set(MENU) == set(_BUILDERS) == set(_SHAPERS)
+
+
+def test_run_distinct_params_produce_distinct_results(config):
+    from data_layer.results import list_results
+    rid_day = run_analysis(
+        config, _src(), "uv_pv_by_period",
+        params={"window": ["2026-01-05", "2026-01-06"], "grain": "day"},
+        run_id="r1", config_version="c", aggregate_fetcher=_fake_uv_pv,
+    )
+    rid_month = run_analysis(
+        config, _src(), "uv_pv_by_period",
+        params={"window": ["2026-01-05", "2026-01-06"], "grain": "month"},
+        run_id="r1", config_version="c", aggregate_fetcher=_fake_uv_pv,
+    )
+    assert rid_day != rid_month
+    ids = {r["id"] for r in list_results(config, run_id="r1")}
+    assert {rid_day, rid_month}.issubset(ids)
+
+
+def test_run_identical_params_are_idempotent(config):
+    kw = dict(
+        params={"window": ["2026-01-05", "2026-01-06"], "grain": "day"},
+        run_id="r1", config_version="c", aggregate_fetcher=_fake_uv_pv,
+    )
+    a = run_analysis(config, _src(), "uv_pv_by_period", **kw)
+    b = run_analysis(config, _src(), "uv_pv_by_period", **kw)
+    assert a == b
+
+
+def test_run_empty_result_notes_no_data(config):
+    def empty(config, source, sql):
+        return pd.DataFrame({"period": [], "uv": [], "pv": []})
+    rid = run_analysis(
+        config, _src(), "uv_pv_by_period",
+        params={"window": ["2026-01-05", "2026-01-05"]},
+        run_id="r1", config_version="c", aggregate_fetcher=empty,
+    )
+    _, env = read_result(config, rid)
+    assert "no data in window" in env["caveats"]

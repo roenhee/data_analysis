@@ -68,6 +68,16 @@ _SHAPERS = {
 }
 
 
+def _default_title(analysis_type: str, grain: str, breakdown: list, filters: dict, window) -> str:
+    parts = [analysis_type, grain]
+    if breakdown:
+        parts.append("by=" + "+".join(breakdown))
+    if filters:
+        parts.append("where=" + ",".join(f"{k}={v}" for k, v in sorted(filters.items())))
+    parts.append(f"{window[0]}~{window[1]}")
+    return " · ".join(parts)
+
+
 def run_analysis(config: Config, source: SourceDef, analysis_type: str, params: dict, run_id: str, config_version: str,
                  aggregate_fetcher=None) -> str:
     """명명 지표를 파라미터로 요청받아 전수 집계 → shaping → publish_result.
@@ -92,9 +102,10 @@ def run_analysis(config: Config, source: SourceDef, analysis_type: str, params: 
     if len(data) == 0:
         caveats += " · no data in window"
 
+    title = params.get("title") or _default_title(analysis_type, grain, breakdown, filters, window)
     return publish_result(
         config, run_id=run_id, skill="descriptive",
-        analysis_type=analysis_type, title=params.get("title", analysis_type),
+        analysis_type=analysis_type, title=title,
         data=data, viz=viz, params=params, config_version=config_version,
         caveats=caveats,
     )
