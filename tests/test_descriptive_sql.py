@@ -13,6 +13,7 @@ def _src():
             "isuid": "user.isuid",
             "access_time": "try_cast(common.access_time AS timestamp)",
             "app_version": "env.app_version",
+            "os": "env.os",
             "usage_duration": "try(cast(usage.duration as double))",
         },
         filters=["action.type IN ('Pageview','Event')"],
@@ -40,3 +41,10 @@ def test_uv_pv_sql_breakdown_adds_dim_and_group():
 def test_uv_pv_sql_filter_equality_is_escaped():
     sql = build_uv_pv_sql(_src(), ("2026-01-05", "2026-02-01"), "day", [], {"app_version": "10.5'x"})
     assert "env.app_version = '10.5''x'" in sql
+
+
+def test_uv_pv_sql_multi_breakdown_group_by():
+    sql = build_uv_pv_sql(_src(), ("2026-01-05", "2026-02-01"), "day", ["app_version", "os"], {})
+    assert "env.app_version AS app_version" in sql
+    assert "env.os AS os" in sql
+    assert "GROUP BY 1, 2, 3" in sql

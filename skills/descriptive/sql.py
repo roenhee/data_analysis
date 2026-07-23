@@ -18,7 +18,7 @@ def _escape(value) -> str:
     return str(value).replace("'", "''")
 
 
-def _where(source: SourceDef, window, filters: dict) -> str:
+def _where(source: SourceDef, window: tuple[str, str], filters: dict) -> str:
     start, end = window
     ts = _col(source, "access_time", "try_cast(common.access_time AS timestamp)")
     conds = ["1=1", *source.filters]
@@ -33,11 +33,11 @@ def _period_expr(source: SourceDef, grain: str) -> str:
     return f"date_trunc('{grain}', {ts})"
 
 
-def _breakdown_selects(source: SourceDef, breakdown) -> list:
+def _breakdown_selects(source: SourceDef, breakdown: list) -> list:
     return [f"{_col(source, b, b)} AS {b}" for b in breakdown]
 
 
-def _assemble(select_lines: list, source: SourceDef, window, filters: dict, n_dims: int) -> str:
+def _assemble(select_lines: list, source: SourceDef, window: tuple[str, str], filters: dict, n_dims: int) -> str:
     group_by = ", ".join(str(n) for n in range(1, 2 + n_dims))   # period(+breakdown)
     return (
         "SELECT\n    " + ",\n    ".join(select_lines)
@@ -47,7 +47,8 @@ def _assemble(select_lines: list, source: SourceDef, window, filters: dict, n_di
     )
 
 
-def build_uv_pv_sql(source: SourceDef, window, grain, breakdown, filters) -> str:
+def build_uv_pv_sql(source: SourceDef, window: tuple[str, str], grain: str, breakdown: list, filters: dict) -> str:
+    """기간(period)별 UV/PV 전수 집계 SQL. breakdown은 period 위에 얹는 추가 GROUP BY 축."""
     au = _col(source, "app_user_id", "user.app_user_id")
     at = _col(source, "action_type", "action.type")
     lines = [
