@@ -43,7 +43,18 @@ def gender_expr(dim_alias: str = "d") -> str:
 
 
 def age_band_expr(dim_alias: str = "d") -> str:
-    return f"coalesce(cast({dim_alias}.service_age_band AS varchar), 'unknown')"
+    """`service_age_band` 의 `0` 은 원천이 쓰는 '연령 미상' 센티널이다.
+
+    매칭 실패(NULL)와 **같은 `'unknown'` 한 버킷으로 접는다.** 둘을 나누면 스펙이 정의한
+    8개 값이 9개가 되고, `age_band='unknown'` 으로 필터하는 소비자가 미상 유저의
+    대부분(전체 성연령 테이블의 64%)을 조용히 놓친다. 매칭 여부 자체의 구분은 축이 아니라
+    커버리지·`quality` 큐브에서 다룬다.
+    """
+    col = f"{dim_alias}.service_age_band"
+    return (
+        f"CASE WHEN {col} IS NULL OR {col} = 0 THEN 'unknown' "
+        f"ELSE cast({col} AS varchar) END"
+    )
 
 
 def app_version_expr(versions: list[str]) -> str:
