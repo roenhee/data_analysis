@@ -51,6 +51,8 @@
 | `analytics/cube/store.py` | 큐브 캐시 키·parquet 경로 규약과 읽기/쓰기 |
 | `analytics/cube/sql.py` | `session`·`transition`·`quality` 큐브 집계 SQL |
 | `analytics/cube/builder.py` | 2단계 빌드 오케스트레이션, 증분 스킵 |
+| `tests/__init__.py` | **필수.** 없으면 pytest가 `tests/analytics/test_axes.py` 의 모듈명을 `analytics.test_axes` 로 유도해 진짜 `analytics` 패키지를 가려버리고 `from analytics.cube... import` 가 `ModuleNotFoundError` 로 실패한다. 빈 파일 |
+| `tests/analytics/__init__.py` | 빈 파일 |
 | `tests/analytics/test_axes.py` 등 | 위 각 모듈 테스트 |
 | `tests/integration/test_cube_live.py` | 라이브 스모크 |
 
@@ -515,7 +517,7 @@ def core_axis_selects(versions: list[str], dim_alias: str = "d") -> list[str]:
 - [ ] **Step 4: 통과 확인**
 
 Run: `.venv/bin/python -m pytest tests/analytics/test_axes.py -q`
-Expected: PASS (8 tests)
+Expected: PASS (7 tests)
 
 - [ ] **Step 5: 커밋**
 
@@ -1375,7 +1377,7 @@ def build_session_cube_sql(
 - [ ] **Step 4: 통과 확인**
 
 Run: `.venv/bin/python -m pytest tests/analytics/test_cube_sql_session.py -q`
-Expected: PASS (12 tests)
+Expected: PASS (9 tests)
 
 - [ ] **Step 5: 커밋**
 
