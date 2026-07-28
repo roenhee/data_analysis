@@ -1,7 +1,7 @@
 def test_package_exports():
     import data_layer
 
-    for name in ("Config", "run", "SourceDef"):
+    for name in ("Config", "fetch_aggregate", "SourceDef"):
         assert hasattr(data_layer, name)
 
 

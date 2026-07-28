@@ -4,7 +4,6 @@ from data_layer.config import Config
 from data_layer.connection import connect
 from data_layer.fetch_aggregate import fetch_aggregate
 from data_layer.manifest import Manifest
-from data_layer.query import run
 from data_layer.sources import SourceDef, load_sources
 from data_layer.config_artifacts import config_version, events_source_from_json, load_dictionary
 from data_layer.results import list_results, publish_result, read_result
@@ -15,7 +14,6 @@ __all__ = [
     "connect",
     "fetch_aggregate",
     "Manifest",
-    "run",
     "SourceDef",
     "load_sources",
     "config_version",
