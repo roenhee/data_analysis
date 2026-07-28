@@ -2219,6 +2219,75 @@ git commit -m "feat: add cube build CLI and verify measured cube size against sp
 
 ---
 
+### Task 15: 표본 시대 잔여 표면 정리와 `query.py` 결정
+
+**출처:** Task 3의 코드 품질 리뷰. 이 두 항목은 Task 3 커밋의 결함이 아니라 그 삭제로
+비로소 확정된 인접 부패다. Task 8에서 `read_cube` 가 생긴 뒤에 실행해야 `query.py`
+판단이 예측이 아니라 근거를 갖는다. **Task 8 이후, Task 14 이전에 수행한다.**
+
+**Files:**
+- Modify: `data_layer/manifest.py`, `data_layer/config.py`, `tests/test_manifest.py`
+- Decide (삭제 또는 유지): `data_layer/query.py`, `tests/test_query.py`, `data_layer/__init__.py`
+
+- [ ] **Step 1: 죽은 표면을 재확인**
+
+```bash
+grep -rnE "has_event|add_event_partition|event_start_days|add_dim|events_dir|dims_dir" --include='*.py' . | grep -v "\.venv"
+```
+Expected: `data_layer/manifest.py`, `data_layer/config.py`, `tests/test_manifest.py` 만.
+프로덕션 호출자가 나오면 그 항목은 삭제 대상에서 빼고 보고한다.
+
+- [ ] **Step 2: manifest 의 events/dims 표면 삭제**
+
+`data_layer/manifest.py` 에서 `event_start_days`, `has_event`, `add_event_partition`,
+`add_dim` 을 삭제하고, `load()` 의 기본 데이터에서 `"events"`·`"dims"` 버킷과 그
+`setdefault` 를 제거한다. `results`·`published`·`config` 섹션은 **유지**한다.
+
+- [ ] **Step 3: `config.py` 의 미사용 디렉터리 제거**
+
+`events_dir`·`dims_dir` 프로퍼티와 `ensure_dirs()` 의 해당 항목을 삭제한다.
+`results_dir`·`config_dir`·`manifest_path` 는 유지한다.
+
+- [ ] **Step 4: `tests/test_manifest.py` 정리**
+
+삭제된 메서드를 검증하는 테스트를 제거한다. `results`/`published`/`config` 테스트는 유지한다.
+
+- [ ] **Step 5: `query.py` 결정**
+
+이 시점에 `analytics/cube/store.read_cube` 가 존재한다. 다음을 확인한다:
+
+```bash
+grep -rnE "from data_layer.query|data_layer\.query|import run" --include='*.py' . | grep -v "\.venv"
+```
+
+`query.run` 에 프로덕션 호출자가 **여전히 없고** `read_cube` 가 큐브 읽기를 담당한다면
+`data_layer/query.py`·`tests/test_query.py` 를 삭제하고 `data_layer/__init__.py` 의 `run`
+export 를 제거한다. 새 호출자가 생겼다면 유지하고 그 호출자를 보고에 적는다.
+
+**판단 근거(리뷰어 의견, 참고용):** `fetch.py` 가 삭제되어 로컬 원본 이벤트를 만드는
+경로가 없으므로 "로컬 원본에 임의 SQL 실행"이라는 `query.run` 의 고유 니치는 사라졌다.
+`fetch_aggregate` 가 이미 실행+캐시+매니페스트 등록을 담당한다.
+
+- [ ] **Step 6: 스위트 확인**
+
+Run: `.venv/bin/python -m pytest -q`
+Expected: 실패 0. 삭제한 테스트 수만큼 줄어든다. 정확한 수를 보고에 적는다.
+
+- [ ] **Step 7: 커밋**
+
+```bash
+git add -u data_layer tests
+git commit -m "refactor: drop the manifest event/dim surface left dead by the sampling removal"
+```
+
+`query.py` 를 삭제했다면 별도 커밋으로 분리한다:
+
+```bash
+git commit -m "refactor: retire query.py now that read_cube owns cube reads"
+```
+
+---
+
 ## Self-Review 결과
 
 **스펙 커버리지**
@@ -2247,6 +2316,7 @@ git commit -m "feat: add cube build CLI and verify measured cube size against sp
 | 라이브 스모크 | 13 |
 | 실측 대조 | 14 |
 | 87 테스트 회귀 가드 | 1~3의 스위트 확인 스텝 |
+| 표본 시대 잔여 표면(manifest events/dims, query.py) | 15 |
 
 **스코프 밖(2단계 이후)**: `action`·`cond_transition`·`path` 큐브, `metrics/` 지표 계산,
 대시보드, 리포트 팩, `skills/descriptive/` 흡수, `manifest.set_config` 배선.
