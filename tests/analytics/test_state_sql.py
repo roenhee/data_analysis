@@ -59,3 +59,36 @@ def test_version_count_sql_is_pruned_and_safe():
 def test_service_list_escapes_single_quotes():
     sql = build_screen_count_sql(TABLE, WINDOW, ["o'hara"])
     assert "o''hara" in sql
+
+
+def test_every_builder_emits_the_value_cnt_contract():
+    # apply_cut 이 소비하는 컬럼 쌍이므로 네 빌더 모두 지켜야 한다.
+    for builder in (
+        build_screen_count_sql,
+        build_layer1_count_sql,
+        build_layer2_count_sql,
+        build_version_count_sql,
+    ):
+        sql = builder(TABLE, WINDOW, SERVICES)
+        assert "AS value" in sql, builder.__name__
+        assert "AS cnt" in sql, builder.__name__
+
+
+def test_reversed_window_is_rejected():
+    # 뒤집힌 구간은 조용히 0행을 내므로 빈 사전이 만들어진다.
+    import pytest
+
+    with pytest.raises(ValueError, match="precedes start"):
+        build_screen_count_sql(TABLE, ("2026-07-31", "2026-07-01"), SERVICES)
+
+
+def test_base_filters_match_the_events_source_config():
+    """`sources.json` 의 필터가 바뀌면 여기도 따라가야 한다 — 조용한 드리프트 방지."""
+    import json
+    from pathlib import Path
+
+    from analytics.cube.state_sql import BASE_FILTERS
+
+    raw = json.loads(Path("examples/config/sources.json").read_text())
+    events = next(s for s in raw if s["id"] == "events")
+    assert list(BASE_FILTERS) == events["filters"]

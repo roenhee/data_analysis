@@ -19,6 +19,10 @@ def _in_list(values) -> str:
 
 def _where(window: tuple[str, str], services: list[str], extra: list[str]) -> str:
     start, end = window
+    # 뒤집힌 구간은 BETWEEN 을 불만족으로 만들어 조용히 0행을 낸다. 에러도 안 나고
+    # 사전이 빈 채로 만들어지므로 여기서 막는다. ISO 날짜라 문자열 비교로 충분하다.
+    if end < start:
+        raise ValueError(f"window end {end!r} precedes start {start!r}")
     conds = [
         f"date_id BETWEEN {_lit(start)} AND {_lit(end)}",
         f"c_service_code IN ({_in_list(services)})",
