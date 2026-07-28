@@ -6,34 +6,48 @@
     "port": 8443,
     "catalog": "bigdata_omega_common_iceberg",
     "schema": "axz_tiara",
-    "table": "all_tiara_i",
+    "table": "all_tiara_n",
     "auth_ref": "TIARA",
     "column_map": {
+      "uuid": "user.uuid",
+      "suid": "user.suid",
+      "access_time": "try_cast(common.access_time AS timestamp)",
+      "date_id": "date_id",
+      "service_code": "c_service_code",
+      "service_type": "common.service_type",
       "action_type": "action.type",
       "action_name": "action.name",
       "action_kind": "action.kind",
-      "day": "date.day",
-      "app_user_id": "user.app_user_id",
-      "isuid": "user.isuid",
-      "access_time": "try_cast(common.access_time AS timestamp)",
-      "access_timestamp": "common.access_timestamp",
-      "service_code": "common.service_code",
+      "daypart": "date.daypart",
       "os": "env.os",
       "app_version": "env.app_version",
       "layer1": "click.layer1",
       "layer2": "click.layer2",
-      "layer3": "click.layer3",
+      "page": "common.page",
       "usage_duration": "try(cast(usage.duration as double))",
-      "custom_duration": "try(cast(nullif(trim(element_at(custom_props, 'duration')), '') as double))",
-      "custom_duration_timetalk_container": "try(cast(nullif(trim(element_at(custom_props, 'duration:timetalk_container')), '') as double))",
-      "page_meta_id": "nullif(page_meta.id, '')"
+      "is_invalid": "tag.is_invalid"
     },
     "filters": [
-      "(action.type IN ('Pageview','App','Event') OR (action.type = 'Usage' AND action.name = '홈탭_진입'))",
-      "NULLIF(TRIM(user.app_user_id), '') IS NOT NULL",
-      "NULLIF(TRIM(user.isuid), '') IS NOT NULL",
-      "(common.service_code NOT IN ('daummail','dictionary','100','cafe','finance','tistory') OR (common.service_code = 'cafe' AND action.name = 'hot_article_view'))",
-      "action.name NOT LIKE 'js%'"
+      "NULLIF(TRIM(user.uuid), '') IS NOT NULL",
+      "NULLIF(TRIM(user.suid), '') IS NOT NULL",
+      "try_cast(common.access_time AS timestamp) IS NOT NULL",
+      "coalesce(tag.is_invalid, '0') <> '1'"
     ]
+  },
+  {
+    "id": "demography",
+    "kind": "trino",
+    "host": "hadoop-rabbit-trino.onkakao.net",
+    "port": 8443,
+    "catalog": "hadoop_doopey",
+    "schema": "target_subcom",
+    "table": "tb_axz_demography_uuid_v2",
+    "auth_ref": "TIARA",
+    "column_map": {
+      "uuid": "uuid",
+      "gender": "gender",
+      "age_band": "service_age_band"
+    },
+    "filters": []
   }
 ]
