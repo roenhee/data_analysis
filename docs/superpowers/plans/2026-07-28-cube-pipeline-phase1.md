@@ -2327,25 +2327,29 @@ from analytics.cube.store import has_cube, write_cube
 from data_layer.config import Config
 from data_layer.util import day_strings
 
+SOURCES_PATH = Path("examples/config/sources.json")
+
+# `sources.json` 의 좌표와 반드시 같아야 한다 — 갈라지면 `source_version` 만 새로워지고
+# 쿼리는 옛 테이블을 읽어 새 캐시 키 아래 옛 데이터가 앉는다.
+# `test_table_constants_match_sources_json` 이 이 일치를 지킨다.
 EVENTS_TABLE = "bigdata_omega_common_iceberg.axz_tiara.all_tiara_n"
 DEMOGRAPHY_TABLE = "hadoop_doopey.target_subcom.tb_axz_demography_uuid_v2"
 
+# 앱버전 축이 가질 수 있는 최대 값 수. 넘치는 버전은 `app_version_expr` 이 'other' 로
+# 접으므로 합계는 보존된다 — 사라지는 것은 라벨뿐이다.
+MAX_APP_VERSIONS = 16
+
 
 def _default_query(sql: str) -> pd.DataFrame:
-    """실 Trino 실행. `data_layer.fetch_aggregate._default_query` 와 같은 경로."""
-    from data_layer.connection import connect
+    """실 Trino 실행.
+
+    접속 로직은 `data_layer.fetch_aggregate` 의 것을 **재사용한다**. 복사본을 두면
+    한쪽만 고쳐지는 날이 온다.
+    """
+    from data_layer.fetch_aggregate import _default_query as run_on_source
     from data_layer.sources import load_sources
 
-    src = load_sources(Path("examples/config/sources.json"))["events"]
-    conn = connect(src)
-    try:
-        cur = conn.cursor()
-        cur.execute(sql)
-        rows = cur.fetchall()
-        cols = [d[0] for d in cur.description]
-        return pd.DataFrame(rows, columns=cols)
-    finally:
-        conn.close()
+    return run_on_source(load_sources(SOURCES_PATH)["events"], sql)
 
 
 def _run(query_fn, sql: str) -> pd.DataFrame:
@@ -2416,9 +2420,11 @@ def _transition_builder(*, state_dict, date, services, **_):
     )
 
 
-def _quality_builder(*, date, services, **_):
+def _quality_builder(*, date, services, events_table, **_):
+    # 세션 단위 검사가 자정을 넘긴 세션을 보려면 다른 큐브와 같은 창이 필요하다.
     return build_quality_cube_sql(
-        events_table=EVENTS_TABLE, date=date, services=services
+        events_table=events_table, date=date,
+        window_dates=_window_dates(date), services=services,
     )
 
 
@@ -2466,7 +2472,8 @@ def build_cubes(
 - [ ] **Step 4: 통과 확인**
 
 Run: `.venv/bin/python -m pytest tests/analytics/test_builder.py -q`
-Expected: PASS (6 tests)
+Expected: PASS (10 tests). 계획 초안의 6개에 더해 `sources.json` 좌표 일치, quality 창,
+빌더가 받은 테이블 사용, 실패 후 이어서 빌드 4개를 둔다.
 
 - [ ] **Step 5: 전체 스위트 확인**
 
