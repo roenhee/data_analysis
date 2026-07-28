@@ -2610,9 +2610,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from analytics.cube.builder import build_cubes, build_state_dict
-from data_layer.config import Config
-from data_layer.sources import load_sources
+# `pythonpath = .` 는 pytest 에만 적용된다. 스크립트로 직접 돌 때도 리포 루트를 찾게 한다.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from analytics.cube.builder import SOURCES_PATH, build_cubes, build_state_dict  # noqa: E402
+from data_layer.config import Config  # noqa: E402
+from data_layer.sources import load_sources  # noqa: E402
 
 
 def main(argv: list[str]) -> int:
@@ -2624,10 +2627,15 @@ def main(argv: list[str]) -> int:
 
     config = Config.from_env()
     config.ensure_dirs()
-    src = load_sources(Path("examples/config/sources.json"))["events"]
+    sources = load_sources(Path(SOURCES_PATH))
+    events = sources["events"]
+    demography = sources["demography"]
 
     print(f"[1/2] state 사전 생성 {start}~{end} {services}")
-    sd = build_state_dict(config, window=(start, end), services=services)
+    sd = build_state_dict(
+        config, window=(start, end), services=services,
+        events_table=events.qualified_name(),
+    )
     print(f"      version={sd.version()} screens={len(sd.screens)} "
           f"layer1={len(sd.layer1)} layer2={len(sd.layer2)} "
           f"versions={len(sd.app_versions)}")
@@ -2635,7 +2643,9 @@ def main(argv: list[str]) -> int:
     print("[2/2] 큐브 빌드")
     written = build_cubes(
         config, state_dict=sd, window=(start, end), services=services,
-        source_version=src.version(),
+        source_version=events.version(),
+        events_table=events.qualified_name(),
+        demography_table=demography.qualified_name(),
     )
     for p in written:
         size_kb = p.stat().st_size / 1024

@@ -23,6 +23,10 @@ class SourceDef:
     column_map: dict = field(default_factory=dict)
     filters: list = field(default_factory=list)
 
+    def qualified_name(self) -> str:
+        """Trino 완전 수식 테이블명. 좌표를 문자열로 짜맞추는 자리를 하나로 모은다."""
+        return f"{self.catalog}.{self.schema}.{self.table}"
+
     def version(self) -> str:
         return content_hash(
             self.id,
