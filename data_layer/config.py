@@ -12,14 +12,6 @@ class Config:
     root: Path
 
     @property
-    def events_dir(self) -> Path:
-        return self.root / "events"
-
-    @property
-    def dims_dir(self) -> Path:
-        return self.root / "dims"
-
-    @property
     def results_dir(self) -> Path:
         return self.root / "results"
 
@@ -32,7 +24,7 @@ class Config:
         return self.root / "manifest.json"
 
     def ensure_dirs(self) -> None:
-        for d in (self.events_dir, self.dims_dir, self.results_dir, self.config_dir):
+        for d in (self.results_dir, self.config_dir):
             d.mkdir(parents=True, exist_ok=True)
 
     @classmethod
