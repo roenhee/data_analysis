@@ -371,6 +371,7 @@ MSG
 ```python
 from analytics.cube.axes import (
     CORE_AXIS_NAMES,
+    age_band_expr,
     app_version_expr,
     core_axis_selects,
     os_expr,
@@ -428,6 +429,36 @@ def test_unmatched_demography_becomes_unknown_not_null():
     age = next(s for s in selects if s.endswith(" AS age_band"))
     assert "'unknown'" in gender
     assert "'unknown'" in age
+
+
+def test_age_band_folds_the_source_unknown_sentinel_into_unknown():
+    # service_age_band 의 0 은 원천의 '연령 미상' 센티널이므로 NULL과 같은 버킷이어야 한다.
+    # 나누면 축이 8개가 아니라 9개 값이 되고 unknown 필터가 과소집계한다.
+    sql = age_band_expr()
+    assert "= 0" in sql
+    assert "'unknown'" in sql
+
+
+def _by_axis(versions, **kw):
+    return {s.rsplit(" AS ", 1)[1]: s for s in core_axis_selects(versions, **kw)}
+
+
+def test_each_axis_select_carries_its_own_source_column():
+    # 축 이름과 표현식의 짝이 어긋나도 통과하는 테스트를 막는다.
+    sel = _by_axis(["9.5.1"])
+    assert sel["period"].startswith("date_id")
+    assert "common.service_type" in sel["service_type"]
+    assert "env.os" in sel["os"]
+    assert "d.gender" in sel["gender"] and "service_age_band" not in sel["gender"]
+    assert "service_age_band" in sel["age_band"] and "d.gender" not in sel["age_band"]
+    assert "date.daypart" in sel["daypart"]
+    assert "env.app_version" in sel["app_version"]
+
+
+def test_dim_alias_is_plumbed_into_both_demography_axes():
+    sel = _by_axis(["9.5.1"], dim_alias="dem")
+    assert "dem.gender" in sel["gender"]
+    assert "dem.service_age_band" in sel["age_band"]
 ```
 
 - [ ] **Step 2: 실패 확인**
@@ -487,7 +518,18 @@ def gender_expr(dim_alias: str = "d") -> str:
 
 
 def age_band_expr(dim_alias: str = "d") -> str:
-    return f"coalesce(cast({dim_alias}.service_age_band AS varchar), 'unknown')"
+    """`service_age_band` 의 `0` 은 원천이 쓰는 '연령 미상' 센티널이다.
+
+    매칭 실패(NULL)와 **같은 `'unknown'` 한 버킷으로 접는다.** 둘을 나누면 스펙이 정의한
+    8개 값이 9개가 되고, `age_band='unknown'` 으로 필터하는 소비자가 미상 유저의
+    대부분(전체 성연령 테이블의 64%)을 조용히 놓친다. 매칭 여부 자체의 구분은 축이 아니라
+    커버리지·`quality` 큐브에서 다룬다.
+    """
+    col = f"{dim_alias}.service_age_band"
+    return (
+        f"CASE WHEN {col} IS NULL OR {col} = 0 THEN 'unknown' "
+        f"ELSE cast({col} AS varchar) END"
+    )
 
 
 def app_version_expr(versions: list[str]) -> str:
@@ -517,7 +559,7 @@ def core_axis_selects(versions: list[str], dim_alias: str = "d") -> list[str]:
 - [ ] **Step 4: 통과 확인**
 
 Run: `.venv/bin/python -m pytest tests/analytics/test_axes.py -q`
-Expected: PASS (7 tests)
+Expected: PASS (10 tests)
 
 - [ ] **Step 5: 커밋**
 
