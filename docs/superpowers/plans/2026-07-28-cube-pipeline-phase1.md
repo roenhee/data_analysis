@@ -1249,7 +1249,16 @@ git commit -m "feat: add state dictionary source counts SQL"
 ```python
 import pandas as pd
 
-from analytics.cube.store import cube_key, cube_path, has_cube, read_cube, write_cube
+import pytest
+
+from analytics.cube.store import (
+    CubeNotBuiltError,
+    cube_key,
+    cube_path,
+    has_cube,
+    read_cube,
+    write_cube,
+)
 
 KW = dict(
     source_version="sv1",
@@ -1316,9 +1325,10 @@ def test_read_cube_skips_dates_that_were_never_built(config):
     assert df["cnt"].tolist() == [1]
 
 
-def test_read_cube_with_no_built_dates_returns_empty(config):
-    df = read_cube(config, dates=["2026-07-27"], **KW)
-    assert df.empty
+def test_read_cube_raises_when_nothing_was_built(config):
+    # 빈 프레임을 돌려주면 미빌드와 '데이터 없음'이 구분되지 않는다.
+    with pytest.raises(CubeNotBuiltError, match="no cube built"):
+        read_cube(config, dates=["2026-07-27"], **KW)
 ```
 
 `read_cube` 는 `write_cube` 의 짝이다. 이게 없으면 큐브를 만들어 두고 읽을 방법이 없다.
@@ -1392,11 +1402,20 @@ def write_cube(config: Config, df: pd.DataFrame, date: str, **key_parts) -> Path
     return path
 
 
+class CubeNotBuiltError(FileNotFoundError):
+    """요청한 날짜의 큐브가 하나도 없다."""
+
+
 def read_cube(config: Config, dates: list[str], **key_parts) -> pd.DataFrame:
     """요청한 날짜들의 큐브를 하나의 DataFrame으로 읽는다.
 
-    빌드되지 않은 날짜는 조용히 건너뛴다 — 부분 빌드 상태에서도 있는 만큼 읽을 수
-    있어야 한다. 무엇이 없는지는 호출자가 `has_cube` 로 확인한다.
+    일부 날짜가 없으면 있는 것만 읽는다 — 부분 빌드 상태에서도 읽을 수 있어야 한다.
+    무엇이 빠졌는지는 호출자가 `has_cube` 로 확인한다.
+
+    **요청한 날짜가 전부 없으면 `CubeNotBuiltError` 를 낸다.** 빈 DataFrame을 돌려주면
+    "큐브를 안 만들었다"와 "그 세그먼트에 데이터가 없다"가 구분되지 않는다. 전자는
+    파이프라인 공백(에러)이고 후자는 결과(사실)인데, 둘을 같은 값으로 표현하면 대시보드가
+    미빌드 구간을 '0'으로 보고한다. 조용히 틀린 숫자를 내지 않는다는 원칙에 어긋난다.
     """
     paths = [
         str(cube_path(config, date=d, **key_parts))
@@ -1404,7 +1423,11 @@ def read_cube(config: Config, dates: list[str], **key_parts) -> pd.DataFrame:
         if has_cube(config, date=d, **key_parts)
     ]
     if not paths:
-        return pd.DataFrame()
+        raise CubeNotBuiltError(
+            f"no cube built for {key_parts.get('cube_name')!r} on any of {dates}; "
+            "build it first — an empty frame here would be indistinguishable from "
+            "a segment that genuinely has no data"
+        )
     con = duckdb.connect()
     try:
         return con.execute(

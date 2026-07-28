@@ -1,6 +1,15 @@
 import pandas as pd
 
-from analytics.cube.store import cube_key, cube_path, has_cube, read_cube, write_cube
+import pytest
+
+from analytics.cube.store import (
+    CubeNotBuiltError,
+    cube_key,
+    cube_path,
+    has_cube,
+    read_cube,
+    write_cube,
+)
 
 KW = dict(
     source_version="sv1",
@@ -67,6 +76,7 @@ def test_read_cube_skips_dates_that_were_never_built(config):
     assert df["cnt"].tolist() == [1]
 
 
-def test_read_cube_with_no_built_dates_returns_empty(config):
-    df = read_cube(config, dates=["2026-07-27"], **KW)
-    assert df.empty
+def test_read_cube_raises_when_nothing_was_built(config):
+    # 빈 프레임을 돌려주면 미빌드와 '데이터 없음'이 구분되지 않는다.
+    with pytest.raises(CubeNotBuiltError, match="no cube built"):
+        read_cube(config, dates=["2026-07-27"], **KW)
