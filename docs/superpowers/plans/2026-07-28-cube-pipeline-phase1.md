@@ -749,7 +749,7 @@ def assert_safe_sql(sql: str) -> None:
 - [ ] **Step 4: 통과 확인**
 
 Run: `.venv/bin/python -m pytest tests/analytics/test_guard.py -q`
-Expected: PASS (14 tests)
+Expected: PASS (13 tests)
 
 - [ ] **Step 5: 커밋**
 
