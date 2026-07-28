@@ -660,6 +660,35 @@ def test_ne_all_is_banned_like_not_in():
         assert_safe_sql(sql)
 
 
+def test_block_comment_decoy_where_is_rejected():
+    # 블록 주석 안의 미끼 WHERE 를 실제 필터로 오인하면 필터 없는 쿼리가 통과한다.
+    sql = "/* WHERE date_id IN ('x') AND c_service_code IN ('y') */ SELECT 1 FROM t"
+    with pytest.raises(GuardError):
+        assert_safe_sql(sql)
+
+
+def test_block_comment_cannot_supply_a_missing_pruning_column():
+    sql = "SELECT 1 FROM t /* WHERE date_id = 'x' */ WHERE c_service_code IN ('y')"
+    with pytest.raises(GuardError, match="date_id"):
+        assert_safe_sql(sql)
+
+
+def test_known_limitation_literal_containing_where_still_passes():
+    """리터럴 안의 WHERE 를 키워드로 오인한다 — 파서 없이는 못 잡는다.
+
+    실제 WHERE 절이 없는데 통과한다. 위험한 방향의 한계이므로 문서와 함께 고정한다.
+    """
+    sql = "SELECT 'the WHERE clause is missing' AS note, date_id, c_service_code FROM t"
+    assert assert_safe_sql(sql) is None
+
+
+def test_known_limitation_literal_containing_double_dash_is_wrongly_rejected():
+    """리터럴 안의 `--` 가 뒤쪽 실제 필터를 잘라낸다 — 안전한 방향의 오거부."""
+    sql = "SELECT 1 FROM t WHERE x = 'a--b' AND date_id IN ('x') AND c_service_code IN ('y')"
+    with pytest.raises(GuardError):
+        assert_safe_sql(sql)
+
+
 def test_known_limitation_subquery_only_constraint_still_passes():
     """파서 없이는 못 잡는 알려진 한계를 고정한다.
 
@@ -703,6 +732,7 @@ _NULL_POISONED = (
 )
 _WHERE = re.compile(r"\bwhere\b", re.IGNORECASE)
 _LINE_COMMENT = re.compile(r"--[^\n]*")
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 
 
 class GuardError(ValueError):
@@ -715,7 +745,8 @@ def _filter_text(sql: str) -> str:
     프루닝 컬럼이 SELECT 목록이나 주석에만 등장하는 것을 '프루닝됨'으로 오인하지 않기
     위한 것이다. `WHERE` 가 아예 없으면 빈 문자열을 반환해 반드시 거부되게 한다.
     """
-    stripped = _LINE_COMMENT.sub(" ", sql)
+    stripped = _BLOCK_COMMENT.sub(" ", sql)
+    stripped = _LINE_COMMENT.sub(" ", stripped)
     m = _WHERE.search(stripped)
     return stripped[m.end():] if m else ""
 
@@ -723,11 +754,18 @@ def _filter_text(sql: str) -> str:
 def assert_safe_sql(sql: str) -> None:
     """큐브 SQL의 안전 규약을 검사하고 위반 시 `GuardError` 를 던진다.
 
-    **한계**: 프루닝 컬럼이 `WHERE` 이후에 독립 토큰으로 등장하는지까지만 본다.
-    서브쿼리 안에서만 제약되어 바깥 스캔은 안 잘리는 경우는 잡지 못한다. 그걸 잡으려면
-    SQL 파서가 필요하고, 이 가드의 호출자는 우리 자신의 SQL 빌더(Task 12)이므로
-    파서까지는 가지 않는다. 이 함수는 "프루닝이 유효하다"가 아니라
-    "프루닝 컬럼이 필터 위치에 있다"를 보증한다.
+    이 함수는 "프루닝이 유효하다"가 아니라 "프루닝 컬럼이 필터 위치에 있다"를 보증한다.
+
+    **알려진 한계 (모두 파서가 필요해 의도적으로 남긴다)**
+
+    1. 서브쿼리 안에서만 제약되어 바깥 스캔이 안 잘리는 경우를 잡지 못한다.
+    2. `WHERE`/`--` 탐지가 문자열 리터럴을 구분하지 못한다. 리터럴 안의 `--` 는
+       뒤쪽 실제 필터를 잘라내 정상 쿼리를 오거부할 수 있고(안전한 방향), 리터럴 안의
+       `WHERE` 는 실제 `WHERE` 가 없는 쿼리를 통과시킬 수 있다(위험한 방향).
+
+    호출자는 우리 자신의 SQL 빌더(Task 12)이고, 그 빌더는 블록 주석을 쓰지 않으며
+    리터럴은 `_lit()` 로 이스케이프된 열거값(날짜·서비스코드·버전)뿐이라 위 형태를
+    만들지 않는다. 외부 입력을 받게 되면 토크나이저가 필요하다.
     """
     filters = _filter_text(sql).lower()
     for column in REQUIRED_PRUNING_COLUMNS:
@@ -749,7 +787,7 @@ def assert_safe_sql(sql: str) -> None:
 - [ ] **Step 4: 통과 확인**
 
 Run: `.venv/bin/python -m pytest tests/analytics/test_guard.py -q`
-Expected: PASS (13 tests)
+Expected: PASS (17 tests)
 
 - [ ] **Step 5: 커밋**
 
@@ -772,6 +810,7 @@ git commit -m "feat: enforce partition pruning and ban NOT IN in cube SQL"
 
 ```python
 import pandas as pd
+import pytest
 
 from analytics.cube.state_dict import StateDict, apply_cut, load_state_dict, save_state_dict
 
@@ -822,6 +861,43 @@ def test_version_is_stable_across_equal_dicts():
     kw = dict(screens=["s"], layer1=["l"], layer2=[], app_versions=["v"],
               cut_ratio=0.95, min_count=10000)
     assert StateDict(**kw).version() == StateDict(**kw).version()
+
+
+def test_load_rejects_a_file_whose_content_does_not_match_its_version(config):
+    import json
+
+    sd = StateDict(screens=["s"], layer1=[], layer2=[], app_versions=[],
+                   cut_ratio=0.95, min_count=10000)
+    path = save_state_dict(config, sd)
+    raw = json.loads(path.read_text())
+    raw["screens"] = ["tampered"]
+    path.write_text(json.dumps(raw))
+    with pytest.raises(ValueError, match="hashes to"):
+        load_state_dict(config, sd.version())
+
+
+def test_load_rejects_a_file_missing_the_cut_parameters(config):
+    """빠진 컷 파라미터가 기본값으로 조용히 채워지면 큐브가 잘못 라벨링된다."""
+    import json
+
+    sd = StateDict(screens=["s"], layer1=[], layer2=[], app_versions=[],
+                   cut_ratio=0.80, min_count=500)
+    path = save_state_dict(config, sd)
+    raw = json.loads(path.read_text())
+    del raw["cut_ratio"]
+    del raw["min_count"]
+    path.write_text(json.dumps(raw))
+    with pytest.raises(ValueError, match="hashes to"):
+        load_state_dict(config, sd.version())
+
+
+def test_apply_cut_keeps_a_value_whose_count_equals_min_count():
+    counts = _counts([("a", 700), ("b", 300)])
+    assert apply_cut(counts, cut_ratio=1.0, min_count=300) == ["a", "b"]
+
+
+def test_apply_cut_with_all_zero_counts_returns_empty():
+    assert apply_cut(_counts([("a", 0), ("b", 0)]), cut_ratio=0.95, min_count=0) == []
 
 
 def test_save_then_load_roundtrips(config):
@@ -916,16 +992,29 @@ def save_state_dict(config: Config, sd: StateDict) -> Path:
 
 
 def load_state_dict(config: Config, version: str) -> StateDict:
+    """저장된 사전을 읽고 내용이 요청한 버전과 일치하는지 검증한다.
+
+    내용으로 `version()` 을 다시 계산해 대조한다. 이 한 번의 검사가 세 가지를 잡는다:
+    파일 손상, 손편집, 그리고 **구버전 스키마에서 `cut_ratio`·`min_count` 가 빠진 경우**.
+    빠진 필드는 dataclass 기본값으로 조용히 채워지는데, 그 두 값이 어휘를 정의하는
+    파라미터이므로 조용히 다른 컷으로 재해석되면 큐브가 잘못 라벨링된다.
+    """
     path = _dir(config) / f"{version}.json"
     raw = json.loads(path.read_text())
     raw.pop("version", None)
-    return StateDict(**raw)
+    sd = StateDict(**raw)
+    if sd.version() != version:
+        raise ValueError(
+            f"state dict at {path} hashes to {sd.version()} but was requested as "
+            f"{version}; the file is corrupt, hand-edited, or written by an older schema"
+        )
+    return sd
 ```
 
 - [ ] **Step 4: 통과 확인**
 
 Run: `.venv/bin/python -m pytest tests/analytics/test_state_dict.py -q`
-Expected: PASS (8 tests)
+Expected: PASS (12 tests)
 
 - [ ] **Step 5: 커밋**
 

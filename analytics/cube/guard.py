@@ -18,6 +18,7 @@ _NULL_POISONED = (
 )
 _WHERE = re.compile(r"\bwhere\b", re.IGNORECASE)
 _LINE_COMMENT = re.compile(r"--[^\n]*")
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 
 
 class GuardError(ValueError):
@@ -30,7 +31,8 @@ def _filter_text(sql: str) -> str:
     프루닝 컬럼이 SELECT 목록이나 주석에만 등장하는 것을 '프루닝됨'으로 오인하지 않기
     위한 것이다. `WHERE` 가 아예 없으면 빈 문자열을 반환해 반드시 거부되게 한다.
     """
-    stripped = _LINE_COMMENT.sub(" ", sql)
+    stripped = _BLOCK_COMMENT.sub(" ", sql)
+    stripped = _LINE_COMMENT.sub(" ", stripped)
     m = _WHERE.search(stripped)
     return stripped[m.end():] if m else ""
 
@@ -38,11 +40,18 @@ def _filter_text(sql: str) -> str:
 def assert_safe_sql(sql: str) -> None:
     """큐브 SQL의 안전 규약을 검사하고 위반 시 `GuardError` 를 던진다.
 
-    **한계**: 프루닝 컬럼이 `WHERE` 이후에 독립 토큰으로 등장하는지까지만 본다.
-    서브쿼리 안에서만 제약되어 바깥 스캔은 안 잘리는 경우는 잡지 못한다. 그걸 잡으려면
-    SQL 파서가 필요하고, 이 가드의 호출자는 우리 자신의 SQL 빌더(Task 12)이므로
-    파서까지는 가지 않는다. 이 함수는 "프루닝이 유효하다"가 아니라
-    "프루닝 컬럼이 필터 위치에 있다"를 보증한다.
+    이 함수는 "프루닝이 유효하다"가 아니라 "프루닝 컬럼이 필터 위치에 있다"를 보증한다.
+
+    **알려진 한계 (모두 파서가 필요해 의도적으로 남긴다)**
+
+    1. 서브쿼리 안에서만 제약되어 바깥 스캔이 안 잘리는 경우를 잡지 못한다.
+    2. `WHERE`/`--` 탐지가 문자열 리터럴을 구분하지 못한다. 리터럴 안의 `--` 는
+       뒤쪽 실제 필터를 잘라내 정상 쿼리를 오거부할 수 있고(안전한 방향), 리터럴 안의
+       `WHERE` 는 실제 `WHERE` 가 없는 쿼리를 통과시킬 수 있다(위험한 방향).
+
+    호출자는 우리 자신의 SQL 빌더(Task 12)이고, 그 빌더는 블록 주석을 쓰지 않으며
+    리터럴은 `_lit()` 로 이스케이프된 열거값(날짜·서비스코드·버전)뿐이라 위 형태를
+    만들지 않는다. 외부 입력을 받게 되면 토크나이저가 필요하다.
     """
     filters = _filter_text(sql).lower()
     for column in REQUIRED_PRUNING_COLUMNS:

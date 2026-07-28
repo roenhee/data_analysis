@@ -71,7 +71,20 @@ def save_state_dict(config: Config, sd: StateDict) -> Path:
 
 
 def load_state_dict(config: Config, version: str) -> StateDict:
+    """저장된 사전을 읽고 내용이 요청한 버전과 일치하는지 검증한다.
+
+    내용으로 `version()` 을 다시 계산해 대조한다. 이 한 번의 검사가 세 가지를 잡는다:
+    파일 손상, 손편집, 그리고 **구버전 스키마에서 `cut_ratio`·`min_count` 가 빠진 경우**.
+    빠진 필드는 dataclass 기본값으로 조용히 채워지는데, 그 두 값이 어휘를 정의하는
+    파라미터이므로 조용히 다른 컷으로 재해석되면 큐브가 잘못 라벨링된다.
+    """
     path = _dir(config) / f"{version}.json"
     raw = json.loads(path.read_text())
     raw.pop("version", None)
-    return StateDict(**raw)
+    sd = StateDict(**raw)
+    if sd.version() != version:
+        raise ValueError(
+            f"state dict at {path} hashes to {sd.version()} but was requested as "
+            f"{version}; the file is corrupt, hand-edited, or written by an older schema"
+        )
+    return sd
