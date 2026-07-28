@@ -2799,6 +2799,70 @@ git commit -m "refactor: retire query.py now that read_cube owns cube reads"
 
 ---
 
+## 인수인계 메모 (Task 10 이후를 맡는 사람에게)
+
+Task 1~9를 실행하며 계획·설계에서 발견된 결함 11건과, 그로부터 얻은 "어디를 의심해야 하는지"를
+남긴다. 발견된 결함은 **모두 이 계획서와 스펙에 반영**돼 있으므로 재실행해도 되살아나지 않는다.
+
+### 실행 순서
+
+**Task 16 → Task 10 → Task 11 → Task 12 → Task 13 → Task 14 → Task 15**
+
+Task 16(세션 귀속 의미 테스트)을 Task 10보다 먼저 한다. Task 10이 Task 9의
+`_event_cte` 와 세션 귀속 로직을 재사용하므로, 회귀 그물을 먼저 쳐야 한다.
+
+### 이 프로젝트에서 반복적으로 틀린 자리
+
+1. **문자열 테스트가 의미 버그를 못 잡는다.** Task 9의 자정 경계 버그 두 건은 9~10개
+   문자열 테스트를 전부 통과했다. 두 번 다 **합성 이벤트 시뮬레이션**으로만 드러났다.
+   SQL 빌더를 리뷰할 때는 "생성된 문자열이 맞나"가 아니라 **"이 SQL을 실제로 돌리면 무슨
+   행이 나오나"** 를 물어야 한다. `duckdb` 가 `.venv` 에 있으니 의미 검증에 쓸 수 있다.
+
+2. **원천의 센티널 값.** `service_age_band = 0` 은 "연령 미상"이고 전체의 64%다.
+   `coalesce(NULL, 'unknown')` 만 하면 `'0'` 과 `'unknown'` 으로 갈려 축이 9개 값이 된다.
+   비슷한 자리를 만나면 **원천이 "없음"을 어떤 값으로 표현하는지** 먼저 확인한다.
+
+3. **집계 창의 가시성.** 날짜별 증분 빌드는 "내 창 밖의 사실"을 볼 수 없다. 그래서
+   `HAVING date(min(ts)) = D` 같은 조건은 **창이 충분히 넓을 때만** 의도대로 동작한다.
+   창 경계가 걸린 조건을 볼 때마다 "창 밖에 더 이른/늦은 행이 있으면?"을 물어야 한다.
+
+4. **`uv` 는 더할 수 없다.** 롤업은 `GROUPING SETS` 로 미리 만든다. 새 지표를 추가할 때
+   그것이 가산인지 먼저 판정한다.
+
+5. **가드는 "언급"만 본다.** `assert_safe_sql` 은 프루닝 컬럼이 `WHERE` 이후에 독립 토큰으로
+   있는지까지만 확인한다. 서브쿼리 안에서만 제약된 경우나 리터럴 안의 `WHERE` 는 못 잡는다.
+   한계는 `guard.py` docstring 과 pinned 테스트에 적혀 있다.
+
+6. **계획서의 테스트 개수를 손으로 세지 말 것.** 세 번 틀렸다. 스크립트로 센다:
+   ```bash
+   .venv/bin/python - <<'EOF'
+   import re; from pathlib import Path
+   t = Path("docs/superpowers/plans/2026-07-28-cube-pipeline-phase1.md").read_text()
+   for m in re.finditer(r"^### (Task \d+):.*$", t, flags=re.M):
+       nxt = t.find("\n### ", m.end()); seg = t[m.end(): nxt if nxt > 0 else len(t)]
+       a = len(re.findall(r"^def test_", seg, flags=re.M))
+       c = re.search(r"PASS \((\d+) tests?\)", seg)
+       if c and int(c.group(1)) != a: print(f"{m.group(1)}: 주장 {c.group(1)} vs 실제 {a}")
+   EOF
+   ```
+
+### 서브에이전트에게 반드시 넘길 제약
+
+- **`git reset --hard`·`git checkout <path>`·`git stash`·`git restore` 금지.** 한 리뷰어가
+  부모 커밋을 보려고 `git reset --hard` 를 실행해 커밋 안 된 문서 수정을 날렸다.
+  다른 리비전은 `git show <sha>:<path>` 로 읽게 한다.
+- **`git add -A` 금지.** 추적되지 않은 `.DS_Store` 가 있다. 파일을 명시해 스테이징한다.
+- **`git commit` 이 권한 분류기에 막히면 우회 시도 금지.** 스테이징만 하고 보고하게 한다.
+- **계획서의 코드가 내가 말한 개수보다 우선.** 개수 불일치는 보고 대상이지, 테스트를
+  만들어내거나 빼는 근거가 아니다.
+- 리뷰어에게는 **"설계 노트를 믿지 말고 시뮬레이션하라"** 를 명시한다. 그렇게 지시한
+  리뷰가 Task 9의 두 번째 버그를 찾았다.
+
+### 크레덴셜
+
+Trino 접속은 `~/Desktop/리서치/markov/env.py` 의 `TIARA_ID`/`TIARA_PW` 를 import 한다
+(그룹 계정 `axz-adid`). 값을 셸 기록이나 프롬프트에 남기지 않는다.
+
 ## Self-Review 결과
 
 **스펙 커버리지**
