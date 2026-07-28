@@ -363,8 +363,9 @@ cube_key = hash(source_version, state_dict_version, axes, cube_name, date)
 | 대상 | 처리 |
 |---|---|
 | `data_layer/` 대부분 | 유지 |
-| `data_layer/sql_builder.py` | 하드코딩된 `common.access_time`·`app_user_id`·`isuid` 제거. 표본 전용 함수는 삭제 |
+| `data_layer/sql_builder.py` | **삭제.** 표본 전용 함수(`build_prepare_sql`·`build_partition_sql`)와 `build_action_counts_sql` 모두 새 구조에 대응물이 있다 |
 | `data_layer/trino_fetcher.py`, `cleanup.py` | 삭제 (표본 경로 전용) |
+| `data_layer/profile.py` | **삭제.** `compute_dictionary` 의 누적 컷오프 vocabulary 생성은 `analytics/cube/state_dict.apply_cut` 이, `fetch_action_counts` 는 `analytics/cube/state_sql.py` 가 대체한다. 남겨두면 `date_id` 프루닝이 없는 Trino 경로가 살아남아 프루닝 가드를 무력화한다. 컷오프 의미는 **의도적으로 다르다**: `compute_dictionary` 는 vocabulary가 컷오프를 반드시 *초과*하도록 누적비율이 컷오프를 넘는 첫 항목까지 포함했다(strict `>`). `apply_cut` 은 **누적 커버리지가 `cut_ratio` 이상이 되는 최소 집합**을 채택한다. 경계 사례(`700/250/50`, `cut_ratio=0.95`)에서 전자는 세 값을 모두, 후자는 앞의 두 값만 채택한다. 후자가 "상위 95% 커버" 의도에 맞으므로 이를 택하고, Task 6 테스트가 이 경계를 고정한다 |
 | `data_layer/enrich.py`, `fetch.py` | 기본 키 이름을 `uuid` 기준으로 수정 |
 | `examples/config/sources.json` | 새 좌표로 재작성. `"day": "date.day"` 오매핑 제거 (`date.day` 는 요일이지 날짜가 아니다) |
 | `skills/descriptive/` | `analytics/metrics/descriptive.py` 로 흡수 |
