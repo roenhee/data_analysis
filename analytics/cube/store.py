@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import duckdb
@@ -12,6 +13,8 @@ import pandas as pd
 
 from data_layer.config import Config
 from data_layer.util import content_hash
+
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def cube_key(
@@ -42,6 +45,14 @@ def cube_path(
     axes: tuple[str, ...],
     cube_name: str,
 ) -> Path:
+    """큐브 parquet 경로. `date` 는 반드시 `YYYY-MM-DD` 여야 한다.
+
+    검증이 없으면 `date` 가 파일명에 그대로 박히므로 `../` 를 충분히 넣어 캐시 루트 밖에
+    쓸 수 있다. 지금 호출자는 우리 코드뿐이지만, 이 모듈은 모든 캐시 큐브의 정합성 경계라서
+    "호출자가 내부다"에 의존하지 않는다.
+    """
+    if not _DATE.match(date):
+        raise ValueError(f"date must be YYYY-MM-DD, got {date!r}")
     d = cube_dir(config, source_version, state_dict_version, axes, cube_name)
     return d / f"date={date}.parquet"
 

@@ -76,6 +76,34 @@ def test_read_cube_skips_dates_that_were_never_built(config):
     assert df["cnt"].tolist() == [1]
 
 
+def test_cube_path_rejects_a_date_that_escapes_the_cache_root(config):
+    # 검증이 없으면 write_cube 가 캐시 루트 밖에 파일을 쓴다.
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        cube_path(config, date="../" * 6 + "escaped", **KW)
+
+
+def test_cube_path_rejects_a_non_date_string(config):
+    for bad in ("", "2026-7-1", "20260727", "2026-07-27.parquet"):
+        with pytest.raises(ValueError, match="YYYY-MM-DD"):
+            cube_path(config, date=bad, **KW)
+
+
+def test_read_cube_preserves_column_order_and_dtypes(config):
+    df = pd.DataFrame({"from_state": ["a"], "to_state": ["b"], "cnt": [3], "rate": [0.5]})
+    write_cube(config, df, date="2026-07-27", **KW)
+    out = read_cube(config, dates=["2026-07-27"], **KW)
+    assert list(out.columns) == list(df.columns)
+    assert out.dtypes.tolist() == df.dtypes.tolist()
+
+
+def test_read_cube_refuses_to_union_mismatched_schemas(config):
+    # 큐브 SQL이 state 사전 버전을 안 바꾸고 변경되면 날짜별 스키마가 갈릴 수 있다.
+    write_cube(config, pd.DataFrame({"cnt": [1]}), date="2026-07-27", **KW)
+    write_cube(config, pd.DataFrame({"other": [2]}), date="2026-07-28", **KW)
+    with pytest.raises(Exception):
+        read_cube(config, dates=["2026-07-27", "2026-07-28"], **KW)
+
+
 def test_read_cube_raises_when_nothing_was_built(config):
     # 빈 프레임을 돌려주면 미빌드와 '데이터 없음'이 구분되지 않는다.
     with pytest.raises(CubeNotBuiltError, match="no cube built"):

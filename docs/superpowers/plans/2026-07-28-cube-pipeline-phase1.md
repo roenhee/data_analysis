@@ -1325,6 +1325,34 @@ def test_read_cube_skips_dates_that_were_never_built(config):
     assert df["cnt"].tolist() == [1]
 
 
+def test_cube_path_rejects_a_date_that_escapes_the_cache_root(config):
+    # 검증이 없으면 write_cube 가 캐시 루트 밖에 파일을 쓴다.
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        cube_path(config, date="../" * 6 + "escaped", **KW)
+
+
+def test_cube_path_rejects_a_non_date_string(config):
+    for bad in ("", "2026-7-1", "20260727", "2026-07-27.parquet"):
+        with pytest.raises(ValueError, match="YYYY-MM-DD"):
+            cube_path(config, date=bad, **KW)
+
+
+def test_read_cube_preserves_column_order_and_dtypes(config):
+    df = pd.DataFrame({"from_state": ["a"], "to_state": ["b"], "cnt": [3], "rate": [0.5]})
+    write_cube(config, df, date="2026-07-27", **KW)
+    out = read_cube(config, dates=["2026-07-27"], **KW)
+    assert list(out.columns) == list(df.columns)
+    assert out.dtypes.tolist() == df.dtypes.tolist()
+
+
+def test_read_cube_refuses_to_union_mismatched_schemas(config):
+    # 큐브 SQL이 state 사전 버전을 안 바꾸고 변경되면 날짜별 스키마가 갈릴 수 있다.
+    write_cube(config, pd.DataFrame({"cnt": [1]}), date="2026-07-27", **KW)
+    write_cube(config, pd.DataFrame({"other": [2]}), date="2026-07-28", **KW)
+    with pytest.raises(Exception):
+        read_cube(config, dates=["2026-07-27", "2026-07-28"], **KW)
+
+
 def test_read_cube_raises_when_nothing_was_built(config):
     # 빈 프레임을 돌려주면 미빌드와 '데이터 없음'이 구분되지 않는다.
     with pytest.raises(CubeNotBuiltError, match="no cube built"):
@@ -1351,12 +1379,15 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'analytics.cube.store'`
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pandas as pd
 
 from data_layer.config import Config
 from data_layer.util import content_hash
+
+_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def cube_key(
@@ -1387,6 +1418,14 @@ def cube_path(
     axes: tuple[str, ...],
     cube_name: str,
 ) -> Path:
+    """큐브 parquet 경로. `date` 는 반드시 `YYYY-MM-DD` 여야 한다.
+
+    검증이 없으면 `date` 가 파일명에 그대로 박히므로 `../` 를 충분히 넣어 캐시 루트 밖에
+    쓸 수 있다. 지금 호출자는 우리 코드뿐이지만, 이 모듈은 모든 캐시 큐브의 정합성 경계라서
+    "호출자가 내부다"에 의존하지 않는다.
+    """
+    if not _DATE.match(date):
+        raise ValueError(f"date must be YYYY-MM-DD, got {date!r}")
     d = cube_dir(config, source_version, state_dict_version, axes, cube_name)
     return d / f"date={date}.parquet"
 
@@ -1442,7 +1481,7 @@ def read_cube(config: Config, dates: list[str], **key_parts) -> pd.DataFrame:
 - [ ] **Step 4: 통과 확인**
 
 Run: `.venv/bin/python -m pytest tests/analytics/test_store.py -q`
-Expected: PASS (12 tests)
+Expected: PASS (16 tests)
 
 - [ ] **Step 5: 커밋**
 
