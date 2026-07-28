@@ -37,6 +37,14 @@ def test_events_source_points_at_deidentified_table():
     assert src.column_map["service_code"] == "c_service_code"
     # date.day 는 '요일'이므로 날짜 축으로 쓰면 안 된다
     assert "day" not in src.column_map
+    assert src.filters == [
+        "NULLIF(TRIM(user.uuid), '') IS NOT NULL",
+        "NULLIF(TRIM(user.suid), '') IS NOT NULL",
+        "try_cast(common.access_time AS timestamp) IS NOT NULL",
+        "coalesce(tag.is_invalid, '0') <> '1'",
+    ]
+    # NOT IN 은 오른쪽에 NULL이 있으면 조용히 0행을 반환한다 (프로젝트 전역 금지)
+    assert not any("NOT IN" in f.upper() for f in src.filters)
 
 
 def test_demography_source_is_declared():
