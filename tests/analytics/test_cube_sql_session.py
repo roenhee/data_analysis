@@ -8,7 +8,7 @@ ARGS = dict(
     events_table=EVENTS,
     demography_table=DEM,
     date="2026-07-27",
-    next_date="2026-07-28",
+    window_dates=["2026-07-26", "2026-07-27", "2026-07-28"],
     services=["top", "media"],
     versions=["9.5.1", "9.5.0"],
 )
@@ -18,9 +18,18 @@ def test_session_cube_sql_is_pruned_and_safe():
     assert_safe_sql(build_session_cube_sql(**ARGS))
 
 
-def test_reads_the_day_and_the_next_day():
+def test_reads_the_previous_day_too_so_sessions_are_not_double_counted():
+    # D-1 을 안 읽으면 D-1 에 시작해 D 로 넘어온 세션의 꼬리를 D 빌드가 새 세션으로 센다.
     sql = build_session_cube_sql(**ARGS)
-    assert "date_id IN ('2026-07-27', '2026-07-28')" in sql
+    assert "date_id IN ('2026-07-26', '2026-07-27', '2026-07-28')" in sql
+
+
+def test_attribution_date_is_not_taken_from_the_window():
+    # HAVING 의 날짜는 창의 어느 끝도 아니라 귀속 대상 날짜여야 한다.
+    sql = build_session_cube_sql(**ARGS)
+    assert "date('2026-07-27')" in sql
+    assert "date('2026-07-26')" not in sql
+    assert "date('2026-07-28')" not in sql
 
 
 def test_keeps_only_sessions_starting_on_the_target_date():

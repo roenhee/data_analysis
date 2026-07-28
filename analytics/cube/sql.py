@@ -12,16 +12,20 @@ from analytics.cube.state_sql import BASE_FILTERS, _in_list, _lit
 def _event_cte(
     events_table: str,
     demography_table: str,
-    date: str,
-    next_date: str,
+    window_dates: list[str],
     services: list[str],
     versions: list[str],
 ) -> str:
-    """(D, D+1) 이벤트에 성연령을 붙이고 축을 계산한 CTE."""
+    """`window_dates` 파티션의 이벤트에 성연령을 붙이고 축을 계산한 CTE.
+
+    `window_dates` 는 보통 `[D-1, D, D+1]` 이다. `D+1` 은 자정을 넘긴 세션의 꼬리를
+    확보하고, **`D-1` 은 중복 집계를 막는다** — 없으면 `D-1` 에 시작해 `D` 로 넘어온 세션의
+    꼬리를 `D` 빌드가 "`D` 에 시작한 세션"으로 오판해 두 번 센다.
+    """
     axis_selects = ",\n    ".join(core_axis_selects(versions))
     conds = "\n      AND ".join(
         [
-            f"date_id IN ({_in_list([date, next_date])})",
+            f"date_id IN ({_in_list(window_dates)})",
             f"c_service_code IN ({_in_list(services)})",
             *BASE_FILTERS,
         ]
@@ -68,15 +72,16 @@ def build_session_cube_sql(
     events_table: str,
     demography_table: str,
     date: str,
-    next_date: str,
+    window_dates: list[str],
     services: list[str],
     versions: list[str],
 ) -> str:
+    """`date` 에 시작한 세션만 집계한다. `window_dates` 는 읽을 파티션 목록이다."""
     axes = CORE_AXIS_NAMES
     axis_list = ", ".join(axes)
     first_axes = ",\n    ".join(f"min_by({a}, ts) AS {a}" for a in axes)
     return (
-        _event_cte(events_table, demography_table, date, next_date, services, versions)
+        _event_cte(events_table, demography_table, window_dates, services, versions)
         + ",\nsess AS (\n"
         "  SELECT\n"
         "    uuid,\n"
