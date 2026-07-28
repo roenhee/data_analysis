@@ -1958,6 +1958,7 @@ from analytics.cube.sql import QUALITY_CHECKS, build_quality_cube_sql
 ARGS = dict(
     events_table="bigdata_omega_common_iceberg.axz_tiara.all_tiara_n",
     date="2026-07-27",
+    window_dates=["2026-07-26", "2026-07-27", "2026-07-28"],
     services=["top", "media"],
 )
 
@@ -1997,6 +1998,26 @@ def test_groups_by_service_code_so_per_service_variance_is_visible():
 def test_does_not_apply_the_invalid_filter_because_it_measures_quality():
     sql = build_quality_cube_sql(**ARGS)
     assert "tag.is_invalid, '0') <> '1'" not in sql
+
+
+def test_session_checks_use_the_same_attribution_as_the_other_cubes():
+    """세션 검사는 3파티션 창 + 첫 이벤트 귀속을 써야 한다.
+
+    단일 파티션만 읽으면 자정을 넘긴 세션의 span 이 절단되어
+    `session_span_exceeds_timeout` 이 **감시해야 할 바로 그 세션들에 눈이 먼다.**
+    """
+    from analytics.cube.sql import _first_event_attribution
+
+    sql = build_quality_cube_sql(**ARGS)
+    assert _first_event_attribution(ARGS["date"]) in sql
+    assert "date_id IN ('2026-07-26', '2026-07-27', '2026-07-28')" in sql
+
+
+def test_row_checks_are_confined_to_the_target_partition():
+    # 창은 세션 검사용이다. 행 단위 검사까지 3일치를 세면 분모가 3배로 부푼다.
+    sql = build_quality_cube_sql(**ARGS)
+    assert "day AS (" in sql
+    assert "FROM day" in sql
 ```
 
 - [ ] **Step 2: 실패 확인**
@@ -2019,14 +2040,31 @@ QUALITY_CHECKS = (
 )
 
 
-def build_quality_cube_sql(events_table: str, date: str, services: list[str]) -> str:
+def build_quality_cube_sql(
+    events_table: str,
+    date: str,
+    window_dates: list[str],
+    services: list[str],
+) -> str:
     """정합성 검사 큐브.
 
     품질 자체를 재는 쿼리이므로 `tag.is_invalid` 필터를 적용하지 않는다. 필터를 걸면
     측정 대상이 사라진다.
+
+    **창 규약**: `window_dates`(보통 `[D-1, D, D+1]`)를 읽되 용도가 갈린다.
+    - *행 단위* 검사는 `day` CTE(대상 파티션 `D`)만 본다. 3일치를 세면 분모가 부푼다.
+    - *세션 단위* 검사는 창 전체를 보고 다른 큐브와 **같은 첫-이벤트 귀속**을 쓴다.
+      단일 파티션으로 재면 자정을 넘긴 세션의 span 이 절단돼
+      `session_span_exceeds_timeout` 이 감시 대상인 바로 그 세션을 못 본다.
+
+    `total` 은 검사마다 분모가 다르다: 행 검사는 이벤트 수, 세션 검사는 세션 수,
+    `page_name_ambiguous` 는 화면 이름 종수, `screen_other_ratio` 는 Pageview 행 수다.
+
+    `screen_other_ratio` 는 `/other` 로 접히는 비율의 **하한**이다. 사전에 없는 이름도
+    `/other` 로 접히지만 이 쿼리는 state 사전을 모르므로 NULL 이름만 센다.
     """
     where = (
-        f"date_id IN ({_in_list([date])})\n"
+        f"date_id IN ({_in_list(window_dates)})\n"
         f"      AND c_service_code IN ({_in_list(services)})\n"
         "      AND NULLIF(TRIM(user.uuid), '') IS NOT NULL\n"
         "      AND NULLIF(TRIM(user.suid), '') IS NOT NULL"
@@ -2034,6 +2072,7 @@ def build_quality_cube_sql(events_table: str, date: str, services: list[str]) ->
     return (
         "WITH ev AS (\n"
         "  SELECT\n"
+        "    date_id AS period,\n"
         "    c_service_code AS service_code,\n"
         "    coalesce(env.app_version, 'unknown') AS app_version,\n"
         "    user.uuid AS uuid,\n"
@@ -2046,20 +2085,27 @@ def build_quality_cube_sql(events_table: str, date: str, services: list[str]) ->
         f"  FROM {events_table}\n"
         f"  WHERE {where}\n"
         "),\n"
+        # 행 단위 검사는 대상 파티션만 본다. 창은 세션 검사 전용이다.
+        "day AS (\n"
+        f"  SELECT * FROM ev WHERE period = {_lit(date)}\n"
+        "),\n"
         "row_checks AS (\n"
         "  SELECT service_code, app_version,\n"
         "    count(*) AS total,\n"
         "    count_if(action_name IS NULL) AS null_action_name,\n"
         "    count_if(action_type = 'Pageview' AND action_kind IS NULL)"
         " AS pageview_null_kind\n"
-        "  FROM ev GROUP BY 1, 2\n"
+        "  FROM day GROUP BY 1, 2\n"
         "),\n"
+        # 세션 검사는 다른 큐브와 같은 귀속을 쓴다 — 같은 세션 모집단을 재야 한다.
         "sess AS (\n"
-        "  SELECT service_code, app_version, uuid, suid,\n"
+        "  SELECT uuid, suid,\n"
+        "    min_by(service_code, ts) AS service_code,\n"
+        "    min_by(app_version, ts) AS app_version,\n"
         "    count_if(action_type = 'Pageview') AS pv,\n"
         "    date_diff('second', min(ts), max(ts)) AS span_sec\n"
-        "  FROM ev GROUP BY 1, 2, 3, 4\n"
-        "),\n"
+        + _first_event_attribution(date)
+        + "),\n"
         "sess_checks AS (\n"
         "  SELECT service_code, app_version,\n"
         "    count(*) AS total,\n"
@@ -2072,7 +2118,7 @@ def build_quality_cube_sql(events_table: str, date: str, services: list[str]) ->
         "name_pages AS (\n"
         "  SELECT service_code, app_version, action_name,\n"
         "    count(DISTINCT page) AS pages\n"
-        "  FROM ev WHERE action_type = 'Pageview' AND action_name IS NOT NULL\n"
+        "  FROM day WHERE action_type = 'Pageview' AND action_name IS NOT NULL\n"
         "  GROUP BY 1, 2, 3\n"
         "),\n"
         "page_checks AS (\n"
@@ -2085,7 +2131,7 @@ def build_quality_cube_sql(events_table: str, date: str, services: list[str]) ->
         "  SELECT service_code, app_version,\n"
         "    count(*) AS total,\n"
         "    count_if(action_name IS NULL) AS screen_other_ratio\n"
-        "  FROM ev WHERE action_type = 'Pageview' GROUP BY 1, 2\n"
+        "  FROM day WHERE action_type = 'Pageview' GROUP BY 1, 2\n"
         ")\n"
         f"SELECT service_code, app_version, {_lit(date)} AS period,\n"
         "       'null_action_name' AS check_name,\n"
@@ -2112,7 +2158,7 @@ def build_quality_cube_sql(events_table: str, date: str, services: list[str]) ->
 - [ ] **Step 4: 통과 확인**
 
 Run: `.venv/bin/python -m pytest tests/analytics/test_cube_sql_quality.py -q`
-Expected: PASS (6 tests)
+Expected: PASS (8 tests)
 
 - [ ] **Step 5: 커밋**
 
