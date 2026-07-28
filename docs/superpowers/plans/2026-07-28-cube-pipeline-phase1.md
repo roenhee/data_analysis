@@ -48,7 +48,7 @@
 | `analytics/cube/guard.py` | 파티션 프루닝 강제, `NOT IN` 금지 검증 |
 | `analytics/cube/state_dict.py` | state 사전 자료구조·컷 로직·저장/로드 |
 | `analytics/cube/state_sql.py` | state 사전 생성용 집계 SQL |
-| `analytics/cube/store.py` | 큐브 캐시 키와 parquet 경로 규약 |
+| `analytics/cube/store.py` | 큐브 캐시 키·parquet 경로 규약과 읽기/쓰기 |
 | `analytics/cube/sql.py` | `session`·`transition`·`quality` 큐브 집계 SQL |
 | `analytics/cube/builder.py` | 2단계 빌드 오케스트레이션, 증분 스킵 |
 | `tests/analytics/test_axes.py` 등 | 위 각 모듈 테스트 |
@@ -238,86 +238,120 @@ group account -- structurally impossible to violate."
 
 ---
 
-### Task 3: 세션키를 (uuid, suid) 로 전환
+### Task 3: 표본 시대 잔여 모듈 정리
+
+**계획 수정 이력:** 원래 이 태스크는 `fetch.py`·`enrich.py` 의 기본 키 이름을
+`app_user_id` → `uuid` 로 바꾸는 작업이었다. Task 2의 코드 품질 리뷰에서 이 모듈들이
+프로덕션 호출자가 없는 표본 시대 코드임이 드러났다. 죽은 코드의 컬럼명을 다듬으면
+살아있는 것처럼 보이게 만들 뿐이므로, 이름을 바꾸는 대신 삭제한다.
+
+**삭제 근거 (모듈별)**
+
+| 모듈 | 근거 |
+|---|---|
+| `convergence.py` | `check_convergence(analysis_fn, sizes, tol)` 는 표본 크기를 키우며 지표 안정성을 확인한다. 전수 집계로 확정했으므로 키울 표본 크기가 없다 |
+| `fetch.py` | `get_events` 는 원본 이벤트를 날짜별로 로컬 parquet에 당긴다. 큐브 설계는 집계 결과만 내리며 원본을 로컬에 두지 않는다 |
+| `enrich.py` | `join_dim` 은 로컬 DuckDB에서 이벤트와 차원을 조인한다. 성·연령은 서버측 SQL `JOIN` 으로 붙는다 |
+
+`data_layer/query.py` 는 **삭제하지 않는다.** 표본 코드가 아니라 범용 로컬 DuckDB 실행+캐시
+프리미티브이고, 대체물(`analytics/cube/store.read_cube`)이 아직 없으므로 폐기 판단은 예측에
+불과하다. Phase 2에서 `metrics/` 가 큐브를 실제로 읽는 방식이 정해진 뒤 근거를 갖고 결정한다.
 
 **Files:**
-- Modify: `data_layer/fetch.py:63`
-- Modify: `data_layer/enrich.py:10`
-- Modify: `tests/conftest.py:19-42`
-- Test: `tests/test_fetch.py`, `tests/test_enrich.py`
+- Delete: `data_layer/convergence.py`, `data_layer/fetch.py`, `data_layer/enrich.py`
+- Delete: `tests/test_convergence.py`, `tests/test_fetch.py`, `tests/test_enrich.py`
+- Modify: `data_layer/__init__.py`, `tests/test_util.py`, `tests/conftest.py`
 
-- [ ] **Step 1: conftest fixture 를 새 식별자로 교체**
+- [ ] **Step 1: 호출자가 없음을 재확인**
 
-`tests/conftest.py` 의 `sample_events` fixture 를 아래로 교체:
-
-```python
-@pytest.fixture
-def sample_events():
-    return pd.DataFrame(
-        {
-            "uuid": ["u1", "u1", "u1", "u2", "u2"],
-            "suid": ["s1", "s1", "s1", "s2", "s2"],
-            "access_time": [
-                "2026-01-05 23:59:50",
-                "2026-01-06 00:00:10",
-                "2026-01-06 00:00:30",
-                "2026-01-06 09:00:00",
-                "2026-01-06 09:01:00",
-            ],
-            "access_timestamp": [
-                1767625190000,
-                1767625210000,
-                1767625230000,
-                1767657600000,
-                1767657660000,
-            ],
-            "date_id": ["2026-01-05", "2026-01-06", "2026-01-06", "2026-01-06", "2026-01-06"],
-            "action_name": ["홈탭_진입", "뉴스_1슬롯", "앱종료", "홈탭_진입", "앱종료"],
-        }
-    )
+Run:
+```bash
+grep -rn "data_layer.convergence|data_layer.fetch |data_layer.enrich|check_convergence|get_events|read_partitions|missing_start_days|join_dim" --include='*.py' -E . | grep -v "\.venv"
 ```
+Expected: `data_layer/__init__.py` 와 삭제 대상 테스트 파일들만. `data_layer/fetch_aggregate.py`
+는 이름이 비슷하지만 **다른 모듈이고 유지 대상**이므로 결과에 섞여 나오면 무시한다.
 
-- [ ] **Step 2: 실패 확인**
+프로덕션 파일에서 참조가 나오면 **STOP 하고 NEEDS_CONTEXT 로 보고**한다.
 
-Run: `.venv/bin/python -m pytest tests/test_fetch.py tests/test_enrich.py -q`
-Expected: FAIL — `KeyError: 'app_user_id'`
-
-- [ ] **Step 3: `fetch.py` 수정**
-
-`data_layer/fetch.py:63` 를 교체:
-
-```python
-            entities=int(df["uuid"].nunique()) if len(df) else 0,
-```
-
-- [ ] **Step 4: `enrich.py` 수정**
-
-`data_layer/enrich.py:10` 를 교체:
-
-```python
-    key: str = "uuid",
-```
-
-- [ ] **Step 5: 남은 실패 확인 및 테스트 파일 수정**
-
-Run: `.venv/bin/python -m pytest tests/test_fetch.py tests/test_enrich.py -q`
-Expected: 테스트 본문에 `app_user_id`/`isuid` 문자열이 남아 있으면 FAIL. 해당 리터럴을 `uuid`/`suid` 로 바꾼다. `day` 컬럼을 참조하는 곳은 `date_id` 로 바꾼다.
-
-- [ ] **Step 6: 전체 스위트 확인**
-
-Run: `.venv/bin/python -m pytest -q`
-Expected: PASS, 실패 0
-
-- [ ] **Step 7: 잔여 참조 확인**
-
-Run: `grep -rn "app_user_id\|isuid" --include=*.py . | grep -v "^./.venv"`
-Expected: 출력 없음 (`skills/descriptive/` 에 남아 있으면 그건 2단계 흡수 대상이므로 이 태스크에서는 남겨두고 결과에 보고한다)
-
-- [ ] **Step 8: 커밋**
+- [ ] **Step 2: 삭제**
 
 ```bash
-git add -A
-git commit -m "refactor: switch session key to (uuid, suid) for the de-identified table"
+git rm data_layer/convergence.py data_layer/fetch.py data_layer/enrich.py
+git rm tests/test_convergence.py tests/test_fetch.py tests/test_enrich.py
+```
+
+- [ ] **Step 3: `data_layer/__init__.py` 정리**
+
+`convergence`, `fetch`, `enrich` 관련 import 와 `__all__` 항목(`check_convergence`,
+`get_events`, `join_dim`)을 삭제한다. `fetch_aggregate` 는 **남긴다**. 다른 import 는 건드리지 않는다.
+
+- [ ] **Step 4: `tests/test_util.py` 정리**
+
+export 검증 튜플에서 `"get_events"` 를 제거한다. 다른 부분은 건드리지 않는다.
+
+- [ ] **Step 5: `tests/conftest.py` 의 미사용 fixture 삭제**
+
+`sample_events` fixture 는 `test_fetch.py`·`test_enrich.py` 만 사용했으므로 이제 아무도 쓰지
+않는다. fixture 전체와 그 때문에만 필요한 `import pandas as pd` 를 삭제한다.
+`config` fixture 와 그 import 는 남긴다.
+
+삭제 전에 확인:
+```bash
+grep -rn "sample_events" --include='*.py' . | grep -v "\.venv"
+```
+Expected: `tests/conftest.py` 만 (다른 파일이 나오면 STOP 하고 보고).
+
+- [ ] **Step 6: 스위트 확인**
+
+Run: `.venv/bin/python -m pytest -q`
+Expected: **65 passed, 3 skipped**, 실패 0.
+
+도출: 현재 75 passed / 3 skipped. 삭제되는 통과 테스트는 `test_convergence` 2 +
+`test_fetch` 6 + `test_enrich` 2 = 10개. 75 − 10 = 65.
+다른 숫자가 나오면 무관한 테스트를 고치지 말고 조사해 보고한다.
+
+- [ ] **Step 7: 임포트 확인**
+
+Run: `.venv/bin/python -c "import data_layer; print('ok')"`
+Expected: `ok`
+
+- [ ] **Step 8: 잔여 참조 확인**
+
+Run:
+```bash
+grep -rn "check_convergence|get_events|read_partitions|missing_start_days|join_dim|data_layer.enrich|data_layer.convergence" --include='*.py' -E . | grep -v "\.venv"
+```
+Expected: 출력 없음.
+
+`app_user_id`/`isuid` 잔여도 확인:
+```bash
+grep -rn "app_user_id|isuid" --include='*.py' -E . | grep -v "\.venv"
+```
+Expected: `skills/descriptive/` 와 `tests/test_descriptive_*.py`, `tests/test_manifest.py`,
+`tests/test_fetch_aggregate.py` 만 남는다. 이들은 **Phase 2 흡수 대상이므로 이 태스크에서
+건드리지 않는다.** 목록을 보고에 그대로 적는다.
+
+- [ ] **Step 9: 커밋**
+
+`.DS_Store` 가 스테이징되지 않도록 `git add -A` 를 쓰지 말고 파일을 명시한다.
+
+```bash
+git add data_layer/__init__.py tests/test_util.py tests/conftest.py
+git commit -F - <<'MSG'
+refactor: remove sampling-era modules with no callers
+
+convergence.py grew a sample until metrics stabilised; with full-population
+aggregation there is no sample size to grow. fetch.py pulled raw events into
+local parquet and enrich.py joined dimensions locally; the cube design lands
+only aggregates and joins demography server-side in SQL. None of the three had
+a production caller -- only their own tests and package exports.
+
+Renaming their key columns to uuid, as originally planned, would have polished
+dead code into looking alive.
+
+query.py stays for now: it is a general local-DuckDB execute-and-cache
+primitive rather than sampling code, and its replacement does not exist yet.
+MSG
 ```
 
 ---
@@ -968,7 +1002,7 @@ git commit -m "feat: add state dictionary source counts SQL"
 ```python
 import pandas as pd
 
-from analytics.cube.store import cube_key, cube_path, has_cube, write_cube
+from analytics.cube.store import cube_key, cube_path, has_cube, read_cube, write_cube
 
 KW = dict(
     source_version="sv1",
@@ -1020,7 +1054,28 @@ def test_write_cube_roundtrips_the_frame(config):
 def test_different_dates_do_not_collide(config):
     write_cube(config, pd.DataFrame({"cnt": [1]}), date="2026-07-27", **KW)
     assert has_cube(config, date="2026-07-28", **KW) is False
+
+
+def test_read_cube_concatenates_the_requested_dates(config):
+    write_cube(config, pd.DataFrame({"cnt": [1]}), date="2026-07-27", **KW)
+    write_cube(config, pd.DataFrame({"cnt": [2]}), date="2026-07-28", **KW)
+    df = read_cube(config, dates=["2026-07-27", "2026-07-28"], **KW)
+    assert sorted(df["cnt"].tolist()) == [1, 2]
+
+
+def test_read_cube_skips_dates_that_were_never_built(config):
+    write_cube(config, pd.DataFrame({"cnt": [1]}), date="2026-07-27", **KW)
+    df = read_cube(config, dates=["2026-07-27", "2026-07-28"], **KW)
+    assert df["cnt"].tolist() == [1]
+
+
+def test_read_cube_with_no_built_dates_returns_empty(config):
+    df = read_cube(config, dates=["2026-07-27"], **KW)
+    assert df.empty
 ```
+
+`read_cube` 는 `write_cube` 의 짝이다. 이게 없으면 큐브를 만들어 두고 읽을 방법이 없다.
+Phase 2의 `metrics/` 는 이 함수로 큐브를 받아 계산한다.
 
 - [ ] **Step 2: 실패 확인**
 
@@ -1088,12 +1143,36 @@ def write_cube(config: Config, df: pd.DataFrame, date: str, **key_parts) -> Path
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(path, index=False)
     return path
+
+
+def read_cube(config: Config, dates: list[str], **key_parts) -> pd.DataFrame:
+    """요청한 날짜들의 큐브를 하나의 DataFrame으로 읽는다.
+
+    빌드되지 않은 날짜는 조용히 건너뛴다 — 부분 빌드 상태에서도 있는 만큼 읽을 수
+    있어야 한다. 무엇이 없는지는 호출자가 `has_cube` 로 확인한다.
+    """
+    paths = [
+        str(cube_path(config, date=d, **key_parts))
+        for d in dates
+        if has_cube(config, date=d, **key_parts)
+    ]
+    if not paths:
+        return pd.DataFrame()
+    con = duckdb.connect()
+    try:
+        return con.execute(
+            "SELECT * FROM read_parquet($paths)", {"paths": paths}
+        ).df()
+    finally:
+        con.close()
 ```
+
+`store.py` 상단 import 에 `import duckdb` 를 추가한다.
 
 - [ ] **Step 4: 통과 확인**
 
 Run: `.venv/bin/python -m pytest tests/analytics/test_store.py -q`
-Expected: PASS (9 tests)
+Expected: PASS (12 tests)
 
 - [ ] **Step 5: 커밋**
 
@@ -1296,7 +1375,7 @@ def build_session_cube_sql(
 - [ ] **Step 4: 통과 확인**
 
 Run: `.venv/bin/python -m pytest tests/analytics/test_cube_sql_session.py -q`
-Expected: PASS (9 tests)
+Expected: PASS (12 tests)
 
 - [ ] **Step 5: 커밋**
 
