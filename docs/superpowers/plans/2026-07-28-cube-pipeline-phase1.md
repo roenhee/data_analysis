@@ -1513,7 +1513,7 @@ ARGS = dict(
     events_table=EVENTS,
     demography_table=DEM,
     date="2026-07-27",
-    next_date="2026-07-28",
+    window_dates=["2026-07-26", "2026-07-27", "2026-07-28"],
     services=["top", "media"],
     versions=["9.5.1", "9.5.0"],
 )
@@ -1523,9 +1523,18 @@ def test_session_cube_sql_is_pruned_and_safe():
     assert_safe_sql(build_session_cube_sql(**ARGS))
 
 
-def test_reads_the_day_and_the_next_day():
+def test_reads_the_previous_day_too_so_sessions_are_not_double_counted():
+    # D-1 을 안 읽으면 D-1 에 시작해 D 로 넘어온 세션의 꼬리를 D 빌드가 새 세션으로 센다.
     sql = build_session_cube_sql(**ARGS)
-    assert "date_id IN ('2026-07-27', '2026-07-28')" in sql
+    assert "date_id IN ('2026-07-26', '2026-07-27', '2026-07-28')" in sql
+
+
+def test_attribution_date_is_not_taken_from_the_window():
+    # HAVING 의 날짜는 창의 어느 끝도 아니라 귀속 대상 날짜여야 한다.
+    sql = build_session_cube_sql(**ARGS)
+    assert "date('2026-07-27')" in sql
+    assert "date('2026-07-26')" not in sql
+    assert "date('2026-07-28')" not in sql
 
 
 def test_keeps_only_sessions_starting_on_the_target_date():
@@ -1592,16 +1601,20 @@ from analytics.cube.state_sql import BASE_FILTERS, _in_list, _lit
 def _event_cte(
     events_table: str,
     demography_table: str,
-    date: str,
-    next_date: str,
+    window_dates: list[str],
     services: list[str],
     versions: list[str],
 ) -> str:
-    """(D, D+1) 이벤트에 성연령을 붙이고 축을 계산한 CTE."""
+    """`window_dates` 파티션의 이벤트에 성연령을 붙이고 축을 계산한 CTE.
+
+    `window_dates` 는 보통 `[D-1, D, D+1]` 이다. `D+1` 은 자정을 넘긴 세션의 꼬리를
+    확보하고, **`D-1` 은 중복 집계를 막는다** — 없으면 `D-1` 에 시작해 `D` 로 넘어온 세션의
+    꼬리를 `D` 빌드가 "`D` 에 시작한 세션"으로 오판해 두 번 센다.
+    """
     axis_selects = ",\n    ".join(core_axis_selects(versions))
     conds = "\n      AND ".join(
         [
-            f"date_id IN ({_in_list([date, next_date])})",
+            f"date_id IN ({_in_list(window_dates)})",
             f"c_service_code IN ({_in_list(services)})",
             *BASE_FILTERS,
         ]
@@ -1648,15 +1661,16 @@ def build_session_cube_sql(
     events_table: str,
     demography_table: str,
     date: str,
-    next_date: str,
+    window_dates: list[str],
     services: list[str],
     versions: list[str],
 ) -> str:
+    """`date` 에 시작한 세션만 집계한다. `window_dates` 는 읽을 파티션 목록이다."""
     axes = CORE_AXIS_NAMES
     axis_list = ", ".join(axes)
     first_axes = ",\n    ".join(f"min_by({a}, ts) AS {a}" for a in axes)
     return (
-        _event_cte(events_table, demography_table, date, next_date, services, versions)
+        _event_cte(events_table, demography_table, window_dates, services, versions)
         + ",\nsess AS (\n"
         "  SELECT\n"
         "    uuid,\n"
@@ -1713,7 +1727,7 @@ ARGS = dict(
     events_table="bigdata_omega_common_iceberg.axz_tiara.all_tiara_n",
     demography_table="hadoop_doopey.target_subcom.tb_axz_demography_uuid_v2",
     date="2026-07-27",
-    next_date="2026-07-28",
+    window_dates=["2026-07-26", "2026-07-27", "2026-07-28"],
     services=["top"],
     versions=["9.5.1"],
     screens=["top/홈탭_진입", "top/콘텐츠탭_진입"],
@@ -1777,7 +1791,7 @@ def build_transition_cube_sql(
     events_table: str,
     demography_table: str,
     date: str,
-    next_date: str,
+    window_dates: list[str],
     services: list[str],
     versions: list[str],
     screens: list[str],
@@ -1796,7 +1810,7 @@ def build_transition_cube_sql(
     else:
         screen_expr = "service_code || '/other'"
     return (
-        _event_cte(events_table, demography_table, date, next_date, services, versions)
+        _event_cte(events_table, demography_table, window_dates, services, versions)
         + ",\nscreens AS (\n"
         "  SELECT uuid, suid, ts, usage_duration,\n"
         f"    {screen_expr} AS state,\n"
@@ -2241,14 +2255,23 @@ def build_state_dict(
     return sd
 
 
-def _next_day(day: str) -> str:
-    return (_date.fromisoformat(day) + timedelta(days=1)).isoformat()
+def _window_dates(day: str) -> list[str]:
+    """세션 귀속용 읽기 창 `[D-1, D, D+1]`.
+
+    `D+1` 은 자정을 넘긴 세션의 꼬리를 확보하고, `D-1` 은 중복 집계를 막는다.
+    """
+    d = _date.fromisoformat(day)
+    return [
+        (d - timedelta(days=1)).isoformat(),
+        day,
+        (d + timedelta(days=1)).isoformat(),
+    ]
 
 
 def _session_builder(*, state_dict, date, services, **_):
     return build_session_cube_sql(
         events_table=EVENTS_TABLE, demography_table=DEMOGRAPHY_TABLE,
-        date=date, next_date=_next_day(date), services=services,
+        date=date, window_dates=_window_dates(date), services=services,
         versions=state_dict.app_versions,
     )
 
@@ -2256,7 +2279,7 @@ def _session_builder(*, state_dict, date, services, **_):
 def _transition_builder(*, state_dict, date, services, **_):
     return build_transition_cube_sql(
         events_table=EVENTS_TABLE, demography_table=DEMOGRAPHY_TABLE,
-        date=date, next_date=_next_day(date), services=services,
+        date=date, window_dates=_window_dates(date), services=services,
         versions=state_dict.app_versions, screens=state_dict.screens,
     )
 
@@ -2513,6 +2536,42 @@ for name in ("session", "transition", "quality"):
 PY
 ```
 Expected: `transition` 행수가 스펙의 하루 214,368 과 같은 자릿수(10만~40만)여야 한다. 크게 벗어나면 축 표현식이나 세션 귀속 조건을 점검한다. 결과를 실행 보고에 기록한다.
+
+- [ ] **Step 3b: 세션 중복 집계 교차검증 (중요)**
+
+날짜별 빌드의 세션 합계를 기간 전체 단일 집계와 대조한다. 자정을 넘긴 세션의 중복 집계는
+문자열 테스트로 잡히지 않고 이 대조로만 드러난다.
+
+```bash
+TIARA_ID=... TIARA_PW=... .venv/bin/python - <<'PYEOF'
+import glob, pandas as pd, sys
+sys.path.insert(0, "/Users/roen.axz-pc/Desktop/리서치/markov")
+# 1) 큐브의 날짜별 세션 합계 (전체 축 조합 행만: 롤업 행 제외)
+paths = glob.glob("cache/cubes/session/*/date=*.parquet")
+cube = pd.concat([pd.read_parquet(p) for p in paths])
+full = cube.dropna(subset=["service_type", "os", "gender", "age_band", "daypart", "app_version"])
+print("큐브 세션 합계:", int(full["sessions"].sum()))
+PYEOF
+```
+
+그리고 같은 기간·서비스로 Trino에 단일 집계를 던져 비교한다:
+
+```sql
+SELECT count(*) AS sessions FROM (
+  SELECT user.uuid, user.suid
+  FROM bigdata_omega_common_iceberg.axz_tiara.all_tiara_n
+  WHERE date_id BETWEEN '<start>' AND '<end>'
+    AND c_service_code IN (<services>)
+    AND NULLIF(TRIM(user.uuid), '') IS NOT NULL
+    AND NULLIF(TRIM(user.suid), '') IS NOT NULL
+    AND try_cast(common.access_time AS timestamp) IS NOT NULL
+    AND coalesce(tag.is_invalid, '0') <> '1'
+  GROUP BY 1, 2)
+```
+
+Expected: 두 값이 **거의 일치**해야 한다(기간 경계에 걸친 세션만큼의 차이는 정상).
+큐브 합계가 단일 집계보다 **뚜렷하게 크면 중복 집계**이므로 `_window_dates` 와 `HAVING`
+조건을 점검한다.
 
 - [ ] **Step 4: 재실행이 캐시 적중인지 확인**
 
