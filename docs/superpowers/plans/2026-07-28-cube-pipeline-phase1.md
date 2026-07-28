@@ -1762,9 +1762,10 @@ def test_adds_explicit_start_and_exit_states():
 
 
 def test_orders_events_within_a_session():
+    # 한정자가 없으면 screens/kept 양쪽에 uuid,suid 가 있어 "Ambiguous reference" 로 죽는다.
     sql = build_transition_cube_sql(**ARGS)
-    assert "PARTITION BY uuid, suid" in sql
-    assert "ORDER BY ts" in sql
+    assert "PARTITION BY s.uuid, s.suid" in sql
+    assert "ORDER BY s.ts" in sql
 
 
 def test_emits_from_to_cnt_and_duration():
@@ -1781,6 +1782,32 @@ def test_keeps_only_sessions_starting_on_the_target_date():
 def test_screen_list_escapes_single_quotes():
     args = {**ARGS, "screens": ["top/o'hara"]}
     assert "o''hara" in build_transition_cube_sql(**args)
+
+
+def test_attribution_is_identical_to_the_session_cube():
+    """두 큐브는 **같은** 귀속 절을 써야 한다 — 문자열이 아니라 공유 헬퍼로 강제한다.
+
+    계획 초안은 `kept` 를 `screens`(Pageview 행)에서 뽑았다. `top` 이벤트의 90%가
+    비-Pageview 라 대부분의 세션은 비-Pageview 로 시작하고, 그러면 같은 세션이
+    session 큐브와 transition 큐브에서 서로 다른 날짜·daypart 버킷에 앉는다.
+    """
+    from analytics.cube.sql import _first_event_attribution, build_session_cube_sql
+
+    clause = _first_event_attribution(ARGS["date"])
+    session_sql = build_session_cube_sql(
+        **{k: v for k, v in ARGS.items() if k != "screens"}
+    )
+    assert clause in session_sql
+    assert clause in build_transition_cube_sql(**ARGS)
+
+
+def test_sessions_are_attributed_before_screens_are_filtered():
+    # 귀속의 원천은 ev 여야 한다. screens 에서 귀속하면 첫 화면 = 첫 이벤트로 착각한다.
+    sql = build_transition_cube_sql(**ARGS)
+    kept = sql[sql.index("kept AS ("):]
+    kept = kept[: kept.index("),")]
+    assert "FROM ev" in kept
+    assert "FROM screens" not in kept
 ```
 
 - [ ] **Step 2: 실패 확인**
@@ -1788,7 +1815,36 @@ def test_screen_list_escapes_single_quotes():
 Run: `.venv/bin/python -m pytest tests/analytics/test_cube_sql_transition.py -q`
 Expected: FAIL — `ImportError: cannot import name 'build_transition_cube_sql'`
 
-- [ ] **Step 3: 구현 추가**
+- [ ] **Step 3: 귀속 절을 공유 헬퍼로 추출**
+
+session 큐브와 transition 큐브가 **같은 세션 모집단·같은 축 좌표**를 갖도록, 귀속 로직을
+두 곳에 복사하지 않고 하나의 헬퍼로 만든다. 스펙("세션은 첫 이벤트 날짜에 귀속한다.
+축 값도 첫 이벤트 기준")이 요구하는 불변식이고, 복사본은 반드시 갈라진다.
+
+`analytics/cube/sql.py` 에 추가하고 `build_session_cube_sql` 이 이걸 쓰도록 고친다:
+
+```python
+def _first_event_axes(indent: str = "    ") -> str:
+    """세션의 축 값을 첫 이벤트로 고정하는 SELECT 절. 세션이 축에서 쪼개지지 않게 한다."""
+    return (",\n" + indent).join(
+        f"min_by({a}, ts) AS {a}" for a in CORE_AXIS_NAMES
+    )
+
+
+def _first_event_attribution(date: str) -> str:
+    """세션을 첫 이벤트 날짜에 귀속시키는 FROM/GROUP BY/HAVING.
+
+    원천은 반드시 `ev`(전체 이벤트)다. Pageview 로 좁힌 뒤 귀속하면 첫 이벤트가
+    비-Pageview 인 세션의 날짜·daypart 가 session 큐브와 어긋난다.
+    """
+    return (
+        "  FROM ev\n"
+        "  GROUP BY uuid, suid\n"
+        f"  HAVING date(min(ts)) = date({_lit(date)})\n"
+    )
+```
+
+- [ ] **Step 4: 구현 추가**
 
 `analytics/cube/sql.py` 끝에 추가:
 
@@ -1802,10 +1858,13 @@ def build_transition_cube_sql(
     versions: list[str],
     screens: list[str],
 ) -> str:
-    """화면 전이 큐브. START/EXIT를 명시 상태로 추가한다."""
+    """화면 전이 큐브. START/EXIT를 명시 상태로 추가한다.
+
+    세션 모집단과 축 좌표는 `build_session_cube_sql` 과 **같은 첫-이벤트 귀속**을 쓴다
+    (`kept` 가 `screens` 가 아니라 `ev` 에서 나온다). Pageview 없는 세션은 `screens` 와의
+    조인에서 자연히 빠지므로 따로 거를 필요가 없다.
+    """
     axes = CORE_AXIS_NAMES
-    axis_list = ", ".join(axes)
-    first_axes = ",\n        ".join(f"min_by({a}, ts) AS {a}" for a in axes)
     screen_raw = "service_code || '/' || coalesce(nullif(trim(action_name), ''), '(none)')"
     if screens:
         screen_expr = (
@@ -1817,24 +1876,25 @@ def build_transition_cube_sql(
         screen_expr = "service_code || '/other'"
     return (
         _event_cte(events_table, demography_table, window_dates, services, versions)
-        + ",\nscreens AS (\n"
+        + ",\nkept AS (\n"
+        "  SELECT\n"
+        "    uuid,\n"
+        "    suid,\n"
+        f"    {_first_event_axes()}\n"
+        + _first_event_attribution(date)
+        + "),\n"
+        "screens AS (\n"
         "  SELECT uuid, suid, ts, usage_duration,\n"
-        f"    {screen_expr} AS state,\n"
-        f"    {axis_list}\n"
+        f"    {screen_expr} AS state\n"
         "  FROM ev\n"
         "  WHERE action_type = 'Pageview'\n"
         "),\n"
-        "kept AS (\n"
-        "  SELECT uuid, suid,\n"
-        f"        {first_axes}\n"
-        "  FROM screens\n"
-        "  GROUP BY uuid, suid\n"
-        f"  HAVING date(min(ts)) = date({_lit(date)})\n"
-        "),\n"
         "seq AS (\n"
         "  SELECT s.uuid, s.suid, s.ts, s.state, s.usage_duration,\n"
+        # screens 와 kept 가 둘 다 uuid/suid 를 내보내므로 반드시 한정한다.
         "    row_number() OVER (PARTITION BY s.uuid, s.suid ORDER BY s.ts) AS rn,\n"
-        "    lead(s.state) OVER (PARTITION BY s.uuid, s.suid ORDER BY s.ts) AS next_state\n"
+        "    lead(s.state) OVER (PARTITION BY s.uuid, s.suid ORDER BY s.ts)\n"
+        "      AS next_state\n"
         "  FROM screens s\n"
         "  JOIN kept k ON k.uuid = s.uuid AND k.suid = s.suid\n"
         "),\n"
@@ -1858,12 +1918,21 @@ def build_transition_cube_sql(
     )
 ```
 
-- [ ] **Step 4: 통과 확인**
+**⚠️ `dur_sum` 은 라이브에서 반드시 확인한다.** `screens` 는 `action_type='Pageview'` 행만
+쓰는데, 스펙(§데이터 정합성)은 **체류시간이 `type='Usage'` + `kind='UsagePage'` 행에**
+실린다고 적고 있다. Pageview 행의 `usage.duration` 이 NULL이면 `dur_sum` 은 항상 0이 되어
+측정값이 죽는다. Trino 없이는 판정할 수 없으므로 Task 13/14에서 `dur_sum` 의 0 비율을
+직접 본다. 0이면 전이 체류는 `UsagePage` 행에서 끌어와야 하고, 그건 `screens` 에
+`action_type IN ('Pageview','Usage')` 로 두 신호를 합친 뒤 `Usage` 행을 직전 화면에 붙이는
+구조 변경이다 — 발견 시 별도 태스크로 뺀다.
 
-Run: `.venv/bin/python -m pytest tests/analytics/test_cube_sql_transition.py -q`
-Expected: PASS (8 tests)
+- [ ] **Step 5: 통과 확인**
 
-- [ ] **Step 5: 커밋**
+Run: `.venv/bin/python -m pytest tests/analytics/test_cube_sql_transition.py tests/analytics/test_cube_sql_session.py -q`
+Expected: PASS (10 + 10 tests). session 큐브 테스트도 함께 돌린다 — Step 3이 그쪽 코드를
+건드리므로 회귀 그물이 필요하다.
+
+- [ ] **Step 6: 커밋**
 
 ```bash
 git add analytics/cube/sql.py tests/analytics/test_cube_sql_transition.py
@@ -2550,8 +2619,15 @@ for name in ("session", "transition", "quality"):
     print(f"{name:11} rows={len(df):>10,}")
     if name == "transition":
         print("            states:", df["from_state"].nunique())
+        # dur_sum 이 죽었는지 확인한다 — Task 10 의 ⚠️ 참조.
+        zero = (df["dur_sum"] == 0).mean()
+        print(f"            dur_sum 이 0인 비율: {zero:.1%}")
 PY
 ```
+
+`dur_sum` 이 0인 비율이 START 행 비중(전이쌍의 1/n 수준)을 크게 넘어 100%에 가까우면
+Pageview 행에 `usage.duration` 이 실리지 않는다는 뜻이다. Task 10의 ⚠️ 대로 별도
+태스크로 뺀다.
 Expected: `transition` 행수가 스펙의 하루 214,368 과 같은 자릿수(10만~40만)여야 한다. 크게 벗어나면 축 표현식이나 세션 귀속 조건을 점검한다. 결과를 실행 보고에 기록한다.
 
 - [ ] **Step 3b: 세션 중복 집계 교차검증 (중요)**
