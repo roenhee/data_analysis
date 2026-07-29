@@ -211,3 +211,37 @@ def absorption_probabilities(
     for k, name in enumerate(absorbing):
         out[name] = B[:, k]
     return pd.DataFrame(out)
+
+
+def pointwise_mutual_information(P: TransitionMatrix) -> pd.DataFrame:
+    """관측 전이가 독립 가정보다 얼마나 흔한가.
+
+    `PMI(i,j) = log( p(i,j) / (p(i)·p(j)) )`. 양수면 그 쌍이 예상보다 자주 일어난다.
+    빈도 순위와 달리 "흔한 화면이라 흔한" 전이를 걸러낸다 — 카운트 1위가 PMI 1위가
+    아닌 것이 이 지표의 존재 이유다.
+
+    `cnt` 를 함께 낸다. 얇은 셀의 PMI 는 크게 튀므로 소비자가 걸러야 한다.
+    """
+    total = P.counts.sum()
+    if total <= 0:
+        raise ValueError("no transitions")
+    p_from = P.counts.sum(axis=1) / total
+    p_to = P.counts.sum(axis=0) / total
+
+    rows = []
+    for i, f in enumerate(P.states):
+        for j, t in enumerate(P.states):
+            c = P.counts[i, j]
+            if c <= 0:
+                continue
+            joint = c / total
+            expected = p_from[i] * p_to[j]
+            rows.append(
+                {
+                    "from_state": f,
+                    "to_state": t,
+                    "cnt": c,
+                    "pmi": float(np.log(joint / expected)),
+                }
+            )
+    return pd.DataFrame(rows)
