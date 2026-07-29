@@ -5,13 +5,17 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
 
 from analytics.analyses.base import AnalysisResult, CubeSet, get_analysis
 from analytics.metrics.compare import comparable_dates, weight_skew
+
+# 층의 물량을 세는 컬럼. 전이 큐브의 이름이다 — 세션 큐브를 분해하려면 여기가 아니라
+# 큐브별 측도 선택이 먼저 필요하다(지금은 막는다, `decompose` 참고).
+VOLUME_COLUMN = "cnt"
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,9 @@ class Comparison:
     result: AnalysisResult
     # `decompose` 가 같은 분석을 층별로 다시 돌리려면 이름이 필요하다.
     analysis_name: str
+    # 그리고 **같은 params 로** 돌려야 한다. 기본값으로 다시 돌면 층별 델타가 `pooled`
+    # 와 다른 지표를 재고, `between = pooled - within` 이 그 차이를 조용히 삼킨다.
+    params: dict = field(default_factory=dict)
 
 
 def _delta(a: dict[str, float], b: dict[str, float]) -> dict[str, float]:
@@ -116,4 +123,85 @@ def compare(
         sign_disagrees=disagrees,
         result=AnalysisResult(frame=per_day, headline=pooled, envelope=envelope),
         analysis_name=analysis_name,
+        params=dict(params),
     )
+
+
+@dataclass(frozen=True)
+class Decomposition:
+    """델타를 **층 안 변화**와 **구성 변화**로 가른다.
+
+    `within` 이 버전 효과 추정치다. `between` 은 "두 세그먼트가 서로 다른 층에 몰려
+    있어서 생긴 몫" 이고, 실측에서 이게 부호를 뒤집었다(층별 +4~6%, 합산 −2.1%).
+    """
+
+    within: float
+    between: float
+    per_stratum: pd.DataFrame
+    composition: dict[str, float]
+
+
+def decompose(
+    cubes: CubeSet, comparison: Comparison, by: list[str], metric: str
+) -> Decomposition:
+    """비교를 층으로 갈라 `within` 과 `between` 으로 분해한다.
+
+    `within + between == pooled_delta` 가 항상 성립한다. 안 맞으면 분해가 틀렸다.
+
+    `within` 은 **b 쪽 층 비중으로 가중한** 층별 델타의 합이다(표준 분해). 즉
+    "구성이 b 와 같았다면 델타가 얼마였겠나" 이다.
+
+    날짜 겹침·배포일 가드는 다시 걸지 않는다 — `comparison.dates_used` 를 그대로
+    물려받는다. 가드는 `compare` 한 곳에만 있다.
+    """
+    if metric not in comparison.pooled:
+        raise KeyError(
+            f"{metric!r} is not in the comparison headline; known: "
+            f"{', '.join(sorted(comparison.pooled))}"
+        )
+    on = comparison.result.envelope["comparison"]["on"]
+    a = comparison.result.envelope["comparison"]["a"]
+    b = comparison.result.envelope["comparison"]["b"]
+    fn = get_analysis(comparison.analysis_name)
+    cube = _primary_cube(cubes)
+    if VOLUME_COLUMN not in cube.columns:
+        raise ValueError(
+            f"decompose weights strata by {VOLUME_COLUMN!r} and this cube has none "
+            f"(columns: {', '.join(map(str, cube.columns))}); weighting by zero would "
+            "report the whole delta as composition rather than refusing"
+        )
+    scoped = cubes.filter(dates=comparison.dates_used)
+
+    rows = []
+    # 비교 창 밖의 층까지 돌린다 — 한쪽에만 있는 층을 버리지 않고 NaN 으로 보고한다.
+    for keys, _ in cube.groupby(by):
+        keys = keys if isinstance(keys, tuple) else (keys,)
+        sel = dict(zip(by, keys))
+        one = scoped.filter(**sel)
+        sa, sb = one.filter(**{on: a}), one.filter(**{on: b})
+        ca = float(_primary_cube(sa)[VOLUME_COLUMN].sum())
+        cb = float(_primary_cube(sb)[VOLUME_COLUMN].sum())
+        if ca <= 0 or cb <= 0:
+            rows.append({**sel, "a_cnt": ca, "b_cnt": cb, "delta": np.nan})
+            continue
+        d = _delta(fn(sa, **comparison.params).headline,
+                   fn(sb, **comparison.params).headline).get(metric, np.nan)
+        rows.append({**sel, "a_cnt": ca, "b_cnt": cb, "delta": d})
+    per = pd.DataFrame(rows)
+
+    usable = per.dropna(subset=["delta"])
+    total_b = usable["b_cnt"].sum()
+    wb = usable["b_cnt"] / total_b if total_b > 0 else 0
+    within = float((usable["delta"] * wb).sum())
+    between = float(comparison.pooled[metric] - within)
+
+    composition = {}
+    for axis in by:
+        ga = per.groupby(axis)["a_cnt"].sum()
+        gb = per.groupby(axis)["b_cnt"].sum()
+        pa = ga / ga.sum() if ga.sum() > 0 else ga
+        pb = gb / gb.sum() if gb.sum() > 0 else gb
+        composition[axis] = float((pa - pb).abs().sum() / 2)
+
+    return Decomposition(within=within, between=between, per_stratum=per,
+                         composition=composition)
