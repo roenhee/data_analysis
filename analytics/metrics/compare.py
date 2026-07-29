@@ -31,24 +31,53 @@ def _dates_of(cube: pd.DataFrame, axis: str, value: str) -> set[str]:
     return set(cube.loc[cube[axis] == value, "period"].dropna())
 
 
-def comparable_dates(cube: pd.DataFrame, axis: str, a: str, b: str) -> list[str]:
+def comparable_dates(
+    cube: pd.DataFrame,
+    axis: str,
+    a: str,
+    b: str,
+    released: dict[str, str] | None = None,
+) -> list[str]:
     """`a` 와 `b` 가 **둘 다** 존재하는 날짜. 없으면 거부한다.
 
     돌려주는 날짜 수가 적으면(1~2일) 요일 효과를 걷어내지 못하므로 호출자가 판단한다 —
     막지는 않되 몇 일인지는 보이게 한다.
 
-    **물량은 여기서 보지 않는다.** 겹치는 날에 한쪽 버전의 점유율이 0.1% 라도 그날은
-    비교 가능하다 — 물량이 적으면 **노이즈**가 커질 뿐 **편향**이 생기지는 않는다.
-    날짜가 어긋나는 것만이 편향이고, 그래서 그것만 막는다. 임계치로 물량을 거르면
-    자의적인 선을 긋는 대신 유효한 비교를 죽이게 된다(체류 커버리지에서 임계치를
-    쓰지 않기로 한 것과 같은 이유).
+    **날짜 겹침만으로는 부족하다.** 한때 이 함수의 주석은 "물량이 적으면 노이즈가
+    커질 뿐 편향은 안 생긴다" 고 적혀 있었는데 **틀렸다.** 겹치는 날 안에서 한쪽 물량이
+    특정 날에 쏠려 있으면 카운트를 합친 순간 날짜 교란이 그대로 돌아온다 — 실측에서
+    9.5.1 은 전이의 97% 가 07-27 하루에 있고 9.5.0 은 4일에 고루 있어서, 합산 델타가
+    "9.5.1 의 07-27" 과 "9.5.0 의 4일 평균" 을 비교하고 있었다(합산 +2.7% vs 07-27 하루
+    +4.0%). 그래서 `day_volumes` 와 `weight_skew` 를 함께 보게 한다.
+
+    `released` 를 주면 **배포일 이전 날짜를 제외한다.** 배포 전 트래픽은 적은 표본이
+    아니라 **다른 모집단**(테스터)이다 — 실측에서 9.5.1 배포일(2026-07-26) 이전 이틀은
+    전이가 4건·308건이었고, 이건 노이즈가 아니라 종류가 다른 데이터다. 등록되지 않은
+    버전은 막지 않는다; 호출자가 `day_volumes` 를 보고 판단한다.
     """
+    before = {v: _dates_of(cube, axis, v) for v in (a, b)}
+    cutoff = None
+    if released:
+        cutoff = max(
+            (released.get(v) for v in (a, b) if released.get(v)), default=None
+        )
+        if cutoff:
+            cube = cube[cube["period"] >= cutoff]
     da, db = _dates_of(cube, axis, a), _dates_of(cube, axis, b)
     for value, dates in ((a, da), (b, db)):
-        if not dates:
+        if dates:
+            continue
+        # 무엇이 비웠는지 구분해서 말한다 — 원래 없던 것과 배포일로 잘린 것은 다르다.
+        if before[value] and cutoff:
             raise ConfoundedComparisonError(
-                f"{axis}={value!r} does not appear in this cube at all"
+                f"no overlapping dates: every row for {axis}={value!r} "
+                f"({min(before[value])}~{max(before[value])}) precedes the release "
+                f"cutoff {cutoff}; pre-release traffic is test traffic, a different "
+                "population rather than a small sample of the same one"
             )
+        raise ConfoundedComparisonError(
+            f"{axis}={value!r} does not appear in this cube at all"
+        )
     both = sorted(da & db)
     if not both:
         raise ConfoundedComparisonError(
@@ -61,8 +90,64 @@ def comparable_dates(cube: pd.DataFrame, axis: str, a: str, b: str) -> list[str]
 
 
 def restrict_to_comparable(
-    cube: pd.DataFrame, axis: str, a: str, b: str
+    cube: pd.DataFrame,
+    axis: str,
+    a: str,
+    b: str,
+    released: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     """두 값과 겹치는 날짜만 남긴 프레임. 이걸 비교의 입력으로 쓴다."""
-    dates = comparable_dates(cube, axis, a, b)
+    dates = comparable_dates(cube, axis, a, b, released=released)
     return cube[cube["period"].isin(dates) & cube[axis].isin([a, b])]
+
+
+def day_volumes(
+    cube: pd.DataFrame,
+    axis: str,
+    a: str,
+    b: str,
+    measure: str = "cnt",
+    released: dict[str, str] | None = None,
+) -> pd.DataFrame:
+    """겹치는 날짜별로 두 세그먼트의 물량과 점유율.
+
+    **합산 델타 하나만 보면 이게 안 보인다.** 실측에서 07-24 의 9.5.1 은 전이 4건이었고
+    그날 델타는 -79.1% 였다 — 숫자만 보면 큰 변화지만 4건짜리다. 표를 같이 내면
+    그게 즉시 보인다. 임계치로 거르지 않고 드러내는 이유다.
+    """
+    dates = comparable_dates(cube, axis, a, b, released=released)
+    sub = cube[cube["period"].isin(dates)]
+    rows = []
+    for day, g in sub.groupby("period"):
+        va = float(g.loc[g[axis] == a, measure].sum())
+        vb = float(g.loc[g[axis] == b, measure].sum())
+        total = float(g[measure].sum())
+        rows.append(
+            {
+                "period": day,
+                "a_cnt": va,
+                "b_cnt": vb,
+                "a_share": va / total if total > 0 else float("nan"),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("period").reset_index(drop=True)
+
+
+def weight_skew(
+    cube: pd.DataFrame,
+    axis: str,
+    a: str,
+    b: str,
+    measure: str = "cnt",
+    released: dict[str, str] | None = None,
+) -> float:
+    """두 세그먼트의 **날짜 가중치**가 얼마나 어긋났는가. 0이면 같은 분포다.
+
+    총변동거리(각 날짜 비중 차이의 절반 합). 이게 크면 겹치는 날짜를 강제했는데도
+    합산 델타가 날짜 효과를 담고 있다.
+    """
+    vols = day_volumes(cube, axis, a, b, measure=measure, released=released)
+    ta, tb = vols["a_cnt"].sum(), vols["b_cnt"].sum()
+    if ta <= 0 or tb <= 0:
+        return float("nan")
+    return float((vols["a_cnt"] / ta - vols["b_cnt"] / tb).abs().sum() / 2)

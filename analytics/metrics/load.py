@@ -63,6 +63,23 @@ def load_holidays(path: Path = HOLIDAYS_PATH) -> tuple[set[str], list[tuple[str,
     return set(raw.get("holidays", {})), windows
 
 
+RELEASES_PATH = Path("examples/config/releases.json")
+
+
+def load_releases(path: Path = RELEASES_PATH) -> dict[str, str]:
+    """`{버전: 배포일}`. `compare` 가 배포 전 날짜를 제외하는 데 쓴다.
+
+    배포 전 트래픽은 **다른 모집단**(테스터)이라 적은 표본과 다르다. 등록되지 않은
+    버전은 막지 않는다 — 그 경우 `day_volumes` 를 보고 사람이 판단한다.
+    """
+    raw = json.loads(Path(path).read_text())
+    return {
+        version: meta["released"]
+        for version, meta in raw.get("app_versions", {}).items()
+        if meta.get("released")
+    }
+
+
 def load_cube(config: Config, dates: list[str], **key_parts) -> LoadedCube:
     """요청 날짜를 읽고 빠진 날짜를 함께 돌려준다.
 
