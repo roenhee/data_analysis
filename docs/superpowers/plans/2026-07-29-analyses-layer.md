@@ -1290,19 +1290,30 @@ git commit -m "test: run every analysis against real cubes and update the skill"
 2. **PMI 에 이름 붙은 분석이 없다.** 쌍(from, to) 단위라 화면 한 줄 프레임에 안 들어간다.
    쌍 모양 분석(`screen_pair_affinity` 같은)이 필요하고, 얇은 셀 임계치를 어떻게 할지가
    설계 결정이다(cnt 중앙값 9, 18.9%가 1).
-3. **`publish` 가 분석 params 를 기록하지 않는다.** `params={"envelope": ...}` 뿐이라
-   `reachability` 의 source/target 같은 것이 발행물에 안 남는다. 지금은 프레임 컬럼으로
-   때웠다. `AnalysisResult` 에 params 를 실어 `publish` 가 함께 기록하는 게 맞다.
+3. ~~**`publish` 가 분석 params 를 기록하지 않는다.**~~ **완료** — `@analysis` 가 호출
+   파라미터를 기록한다(기본값 포함, 집합은 정렬). `publish` 가 `params.analysis` 로 싣고,
+   **같은 제목에 다른 파라미터를 발행하면 거부**한다(id 가 제목으로만 정해져 조용히
+   덮어써졌다). 집합을 그대로 기록하면 `repr` 순서가 프로세스마다 달라 같은 호출이 거짓
+   충돌로 거부된다는 것도 확인해서 정규화했다.
 4. **세션 큐브 분석은 세그먼트 축으로 비교할 수 없다.** `compare` 의 결함이 아니라 큐브
    모양이다 — 버전으로 자르면 `(period)` 롤업 행이 사라지고 `(period, app_version)`
    grouping set 이 없어 그 슬라이스의 `uv` 가 큐브 어디에도 없다. `NonAdditiveMeasureError`
    가 정확히 그렇게 말한다. 필요하면 빌드 시점에 grouping set 을 추가한다. (그래서
    `weight_skew` 의 `measure="cnt"` 하드코딩은 아직 도달 불가다.)
-5. **`quality_thresholds.json` 에 임계치가 3개뿐이다.** 측정된 기저가 있는 것만 넣었다.
-   나머지 5개 검사는 기저를 재고 `basis` 와 함께 추가한다. 지금 3개가 실데이터에서 어떻게
-   행동하는지는 측정해 뒀다 — 날짜 집계 수준에서 `session_no_screen` 은 top 의 3일에,
-   `screen_without_dwell` 은 search 의 15일에 걸리고 `exit_without_appexit` 는 조용하다
-   (전 서비스 0.064~0.111, 임계치 0.15).
+5. ~~**`quality_thresholds.json` 에 임계치가 3개뿐이다.**~~ **완료** — 7개. 규칙을
+   명시하고 테스트로 강제했다: **관측 최댓값 위(드리프트 탐지기) 아니면 나쁜 무리 최솟값
+   아래(상시 표시), 그 사이는 안 된다.** 사이에 두면 정상 변동의 상위 몇 일만 걸린다 —
+   실제로 `session_no_screen` 0.30 이 top 의 0.1960~0.3262 안이라 15일 중 3일만 걸리고
+   있었고(0.15 로 내려 매일 걸린다), 그 결함을 이 규칙을 적으면서 잡았다.
+   - `screen_other_ratio` 는 **일부러 없다.** Pageview 행의 NULL 이름만 세서 39억 행에서
+     정확히 0.0000 인데 고장이 아니다(`null_action_name` 은 top 14~19% 지만 그 NULL 은
+     Pageview 행이 아니다). `sql.py` 가 적어 둔 대로 사전 미스를 못 보는 하한이라,
+     임계치를 걸면 감시되고 있다는 잘못된 안심을 준다.
+   - 실측 경고 60건: `session_no_screen` top 15일, `screen_without_dwell` search 15일,
+     `page_name_ambiguous` sports·search 각 15일. 넷 다 상시 표시이고 실재하는 결함이다.
+   - **`page_name_ambiguous` 는 그 자체로 봐야 한다** — search 화면 이름의 70~79%,
+     sports 의 27~35% 가 여러 페이지를 가리킨다. 그 두 서비스의 화면 단위 해석은 서로
+     다른 페이지를 한 이름에 섞고 있다.
 
 ---
 

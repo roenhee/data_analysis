@@ -246,7 +246,12 @@ guard), `markov.py`, `descriptive.py`, `coverage.py`, `calendar.py`, `compare.py
 `envelope.py`.
 
 Shipped config: `examples/config/holidays_kr.json`, `releases.json`,
-`quality_thresholds.json` (임계치의 근거가 파일 안에 `basis` 로 있다).
+`quality_thresholds.json` (임계치 7개 + 근거가 파일 안에 `basis` 로 있다. 규칙은
+"관측 최댓값 위(드리프트) 아니면 나쁜 무리 최솟값 아래(상시 표시), 그 사이는 안 됨").
+
+**실측 상시 경고 4건** — 지금 데이터가 이미 걸리는 것들이다: `search` 체류 계측 없음(100%),
+`top` 세션 중 화면 없는 것 19.6~32.6%, `search`·`sports` 화면 이름 모호(70~79% / 27~35%).
+마지막 것은 그 두 서비스의 화면 단위 해석이 서로 다른 페이지를 한 이름에 섞고 있다는 뜻이다.
 
 Cubes come from `analytics/cube/` and `scripts/build_cubes.py`.
 Design: `docs/superpowers/specs/2026-07-28-segmented-analytics-design.md`,
