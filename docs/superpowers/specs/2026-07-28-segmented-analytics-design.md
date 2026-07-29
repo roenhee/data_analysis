@@ -143,13 +143,24 @@ state 사전과 함께 1단계에서 확정해 고정한다(날짜별로 다르�
 | # | 큐브 | 키 | 값 | 크기/일 |
 |---|---|---|---|---|
 | ① | `session` | 7축 + GROUPING SETS 롤업행 | `sessions`, `uv`, `pv`, `events`, `duration_sum` | 수천 |
-| ② | `transition` | 7축 + `from_state` + `to_state` | `cnt`, `dur_sum` | 214,368 (실측) |
+| ② | `transition` | 7축 + `from_state` + `to_state` | `cnt`, `dur_sum`, `dur_n` | 229,940 (실측) |
 | ③ | `action` | 7축 + `screen` + `action_kind` + `click_layer1` + `click_layer2` | `cnt` | 수천 |
 | ④ | `cond_transition` | 4축(`period`,`service_type`,`os`,`app_version`) + `from_state` + `action_kind` + `to_state` | `cnt` | ~6만 (추정) |
 | ⑤ | `path` | 7축 + `n`(3~5) + `path` — 세그먼트×n 당 상위 200 | `cnt` | 제한적 |
-| ⑥ | `quality` | `period` + `service_code` + `app_version` + `check_name` | `violated`, `total`, `ratio` | 수백 |
+| ⑥ | `quality` | `period` + `service_code` + `app_version` + `check_name` | `violated`, `total` | 14,043 (실측) |
 
 30일 전체 합산 1,000만 행 남짓, parquet 수백 MB 이내.
+
+⑥은 `ratio` 를 저장하지 않는다 — `violated / total` 로 유도되므로 두 값이 어긋날 여지를
+만들지 않는다. 검사는 7종이다: `null_action_name`, `pageview_null_kind`,
+`screen_other_ratio`, `session_no_screen`, `page_name_ambiguous`,
+`session_span_exceeds_timeout`, `screen_without_dwell`. **`total` 은 검사마다 분모가
+다르다** — 행 검사는 이벤트 수, 세션 검사는 세션 수, `page_name_ambiguous` 는 화면 이름
+종수, `screen_without_dwell` 은 화면 방문 수다.
+
+②의 `dur_n` 은 체류가 측정된 방문 수다. 체류 커버리지가 축마다 달라(§데이터 정합성)
+`dur_sum` 을 전수 절대값으로 쓸 수 없기 때문에 분모를 값과 같이 싣는다.
+`dur_sum / dur_n` 이 조건부 평균이고 `dur_n / cnt` 가 그 셀의 커버리지다.
 
 ④는 축을 4개로 줄였다. 7축을 모두 쓰면 하루 최대 171만 행(전이쌍 3,604 × kind 8)이 되어
 코어보다 무거워진다. "어떤 행동이 다음 화면을 결정하는가"를 성별·연령까지 쪼개 볼
@@ -320,10 +331,21 @@ data_layer의 "개체-완결" 규칙을 큐브에도 적용한다.
 ### 캐시 키
 
 ```
-cube_key = hash(source_version, state_dict_version, axes, cube_name, date)
+cube_key = hash(source_version, state_dict_version, axes, cube_name, sql_hash)
+경로     = cache/cubes/{cube_name}/{cube_key}/date={date}.parquet
 ```
 
 하나라도 바뀌면 다른 파일이 된다. 조용한 덮어쓰기가 구조적으로 불가능하다.
+
+**날짜는 키가 아니라 파일명에 있다.** 날짜를 키에 넣으면 날짜마다 다른 디렉터리가 생겨
+기간 범위 읽기가 깨진다.
+
+**`sql_hash` 는 집계 SQL의 로직 지문이다.** 이게 없으면 집계 SQL을 고쳐도 키가 그대로라
+다시 빌드해도 옛 큐브가 캐시 적중으로 나온다 — 로직을 고쳤는데 결과가 안 바뀌고 그걸
+눈치채지 못한다(1단계에서 실제로 밟았다). 날짜만 `2000-01-01` 로 고정한 SQL을 해싱하므로
+지문은 날짜 간에 같고, 집계 로직·**서비스 목록**·state 사전·테이블 좌표가 바뀌면 달라진다.
+서비스 목록은 키의 다른 어떤 항목에도 없어서, 이 지문이 서비스별 큐브가 같은 경로에
+겹쳐 쓰이는 것도 함께 막는다.
 
 ### 서버 잔여물 없음
 
