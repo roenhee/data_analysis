@@ -62,9 +62,19 @@ def test_no_verified_windows_means_no_check():
     assert sum(len(v) for v in got.values()) == 1
 
 
-def test_the_shipped_config_parses_and_covers_the_backfill_window():
+def test_the_shipped_config_covers_the_whole_year():
     raw = json.loads(Path("examples/config/holidays_kr.json").read_text())
+    assert raw["verified_windows"] == [["2026-01-01", "2026-12-31"]]
     assert "2026-07-17" in raw["holidays"]
-    assert raw["verified_windows"] == [["2026-07-14", "2026-07-27"]]
-    # 목록이 불완전하다는 사실이 파일에 남아 있어야 한다.
-    assert raw["missing"], "음력 공휴일이 빠졌다는 표시가 사라졌다"
+
+
+def test_the_shipped_config_includes_the_lunar_holidays():
+    """음력 공휴일과 대체공휴일이 들어와야 목록이 완전하다.
+
+    이것들은 해마다 날짜가 달라 계산하지 않는다 — 사용자가 채운다.
+    """
+    holidays = json.loads(Path("examples/config/holidays_kr.json").read_text())["holidays"]
+    assert "2026-02-17" in holidays          # 설날
+    assert "2026-09-25" in holidays          # 추석
+    assert "2026-05-24" in holidays          # 부처님 오신 날
+    assert any("대체공휴일" in v for v in holidays.values())
