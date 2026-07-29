@@ -1277,9 +1277,16 @@ git commit -m "test: run every analysis against real cubes and update the skill"
 
 ### 남은 공백 (다음 사람이 할 일)
 
-1. **`CubeSet` 로더가 없다.** 호출자가 `present_dates` 를 손으로 넣는데, 요청 날짜를
-   그대로 넣으면 봉투가 부분 빌드를 완전하다고 보고한다. `load_cube_set(config, dates,
-   services, **key)` 가 이 층의 마지막 조각이다. SKILL.md 레시피에 올바른 패턴은 적어 뒀다.
+1. ~~**`CubeSet` 로더가 없다.**~~ **완료** — `analytics/analyses/cubes.py` 의
+   `load_cube_set`. 키 유도를 빌더에서 `cube_key_parts` 로 빼내 **쓰는 쪽과 읽는 쪽이
+   같은 함수**를 쓴다(`sql_hash` 가 큐브마다 다르고 사전·서비스·테이블 좌표까지 들어가서
+   손으로 채울 수 있는 값이 아니었다 — 그래서 이 층을 실제로 쓸 방법이 없었다).
+   `present_dates` 는 요청한 큐브들의 교집합이고 프레임도 그 날짜로 자른다. 부분 빌드는
+   기본 거부.
+   - 여기서도 조용한 결함을 하나 만들고 잡았다: 날짜 필터를 `isin` 으로만 걸어 **날짜까지
+     접은 `()` 롤업 행**(`period` NULL)을 잘라냈다. 실측 세션 큐브에서 15행이 사라졌고,
+     그게 "기간 전체 `uv` 는 롤업 행에서 읽어라" 가 쓰는 행이다. 행 수를 파일과 대조해
+     발견했다(214,653 대 214,668).
 2. **PMI 에 이름 붙은 분석이 없다.** 쌍(from, to) 단위라 화면 한 줄 프레임에 안 들어간다.
    쌍 모양 분석(`screen_pair_affinity` 같은)이 필요하고, 얇은 셀 임계치를 어떻게 할지가
    설계 결정이다(cnt 중앙값 9, 18.9%가 1).

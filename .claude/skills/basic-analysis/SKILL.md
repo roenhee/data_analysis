@@ -119,25 +119,23 @@ partition.
 
 ```python
 # PYTHONPATH=. .venv/bin/python this_script.py
-from analytics.analyses import CubeSet, get_analysis, list_analyses, publish
+from analytics.analyses import get_analysis, list_analyses, publish
+from analytics.analyses.cubes import load_cube_set
 from analytics.analyses.operators import compare, decompose
-from analytics.metrics.load import load_cube, load_holidays, load_releases
+from analytics.metrics.load import load_holidays, load_releases
 from data_layer.config import Config
 
 config = Config.from_env()
-dates = ["2026-07-26", "2026-07-27", "2026-07-28"]
-key = dict(source_version=..., state_dict_version=..., axes=..., sql_hash=...)
 
-session = load_cube(config, dates=dates, cube_name="session", **key)
-transition = load_cube(config, dates=dates, cube_name="transition", **key)
-quality = load_cube(config, dates=dates, cube_name="quality", **key)
-
-# present_dates 는 **읽힌 날짜**다. 요청 날짜를 그대로 넣으면 봉투가 부분 빌드를
-# 완전하다고 보고한다 — is_complete 와 missing_dates 가 여기서 나온다.
-cubes = CubeSet(
-    session=session.frame, transition=transition.frame, quality=quality.frame,
-    state_dict_version=key["state_dict_version"], services=["top", "media"],
-    requested_dates=dates, present_dates=transition.present_dates,
+# 캐시 키는 로더가 빌더와 같은 함수로 유도한다 — `sql_hash` 는 큐브마다 다르고
+# 사전·서비스·테이블 좌표까지 들어가서 손으로 채울 수 있는 값이 아니다.
+# 부분 빌드는 기본적으로 거부한다(`require_complete=False` 로 일부러 볼 수 있다).
+cubes = load_cube_set(
+    config,
+    dates=["2026-07-26", "2026-07-27", "2026-07-28"],
+    services=["top", "media"],           # 축이 아니라 빌드 범위다
+    state_dict_version="sd_2ab5ec25e750dda2",
+    cube_names=("session", "transition"),   # 필요한 큐브만 — 기본은 셋 다
 )
 
 holidays, _ = load_holidays()
@@ -231,13 +229,14 @@ publish(config, flow, run_id="r1", analysis_type="screen_flow", title="MA 화면
   `cubes.filter(app_version=...)` 로 따로 묻는다.
 - Passing the busiest screen pair to `reachability`. 실측에서 가장 굵은 쌍은
   `top/엠탑조회` → 자기 자신인 자기 루프이고, `reachability` 가 거부한다.
-- Hand-assembling a `CubeSet` with `present_dates=dates`. That claims a partial build is
-  complete. Use the `LoadedCube.present_dates` the loader gives you.
+- Hand-assembling a `CubeSet`. Use `load_cube_set`. Filling `present_dates` with the
+  requested dates claims a partial build is complete, and no exception is raised.
 - Missing `PYTHONPATH=.` on a standalone script → `ModuleNotFoundError`.
 
 ## Engine (backend)
 
 `analytics/analyses/` — `base.py` (`CubeSet`·`AnalysisResult`·`publish`·레지스트리),
+`cubes.py` (`load_cube_set` — 이 층에서 파일시스템을 아는 유일한 모듈),
 `operators.py` (`compare`·`decompose`), `descriptive.py`, `flow.py`, `quality.py`,
 `communities.py` (`networkx`).
 

@@ -96,6 +96,39 @@ def _logic_hash(cube_builder, *, state_dict, services, events_table,
     return content_hash(probe)
 
 
+def cube_key_parts(
+    cube_name: str,
+    *,
+    state_dict,
+    services: list[str],
+    source_version: str,
+    cube_builders: dict | None = None,
+    events_table: str = EVENTS_TABLE,
+    demography_table: str = DEMOGRAPHY_TABLE,
+) -> dict:
+    """큐브 하나의 캐시 키 부품. **쓰는 쪽과 읽는 쪽이 같이 쓴다.**
+
+    키를 두 곳에서 따로 조립하면 한쪽만 고쳐졌을 때 읽기가 조용히 아무것도 못 찾거나,
+    더 나쁘게는 다른 로직으로 만든 큐브를 집어온다. `sql_hash` 가 큐브마다 다르므로
+    호출자가 손으로 채울 수 있는 값도 아니다 — 사전·서비스·테이블 좌표까지 들어간다.
+    """
+    builders = cube_builders or DEFAULT_CUBE_BUILDERS
+    if cube_name not in builders:
+        raise KeyError(
+            f"no such cube: {cube_name!r}; known: {', '.join(sorted(builders))}"
+        )
+    return dict(
+        source_version=source_version,
+        state_dict_version=state_dict.version(),
+        axes=CORE_AXIS_NAMES,
+        cube_name=cube_name,
+        sql_hash=_logic_hash(
+            builders[cube_name], state_dict=state_dict, services=services,
+            events_table=events_table, demography_table=demography_table,
+        ),
+    )
+
+
 def build_state_dict(
     config: Config,
     window: tuple[str, str],
@@ -199,23 +232,18 @@ def build_cubes(
     q = query_fn or _default_query
     builders = cube_builders or DEFAULT_CUBE_BUILDERS
     # 날짜와 무관하므로 날짜 루프 밖에서 한 번만 계산한다.
-    logic = {
-        name: _logic_hash(
-            b, state_dict=state_dict, services=services,
+    keys = {
+        name: cube_key_parts(
+            name, state_dict=state_dict, services=services,
+            source_version=source_version, cube_builders=builders,
             events_table=events_table, demography_table=demography_table,
         )
-        for name, b in builders.items()
+        for name in builders
     }
     written: list[Path] = []
     for day in day_strings(*window):
         for name, builder in builders.items():
-            key_parts = dict(
-                source_version=source_version,
-                state_dict_version=state_dict.version(),
-                axes=CORE_AXIS_NAMES,
-                cube_name=name,
-                sql_hash=logic[name],
-            )
+            key_parts = keys[name]
             if not refresh and has_cube(config, date=day, **key_parts):
                 continue
             sql = builder(
