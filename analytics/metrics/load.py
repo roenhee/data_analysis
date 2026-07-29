@@ -9,7 +9,9 @@
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
 import pandas as pd
 
@@ -44,6 +46,21 @@ class LoadedCube:
                 "with the wrong denominator"
             )
         return self
+
+
+HOLIDAYS_PATH = Path("examples/config/holidays_kr.json")
+
+
+def load_holidays(path: Path = HOLIDAYS_PATH) -> tuple[set[str], list[tuple[str, str]]]:
+    """공휴일 집합과 **검증된 구간** 목록을 돌려준다.
+
+    검증 구간을 함께 내는 이유는 목록이 불완전하기 때문이다 — 음력 공휴일과 대체공휴일은
+    자동 계산하지 않는다. `calendar.split_by_kind(..., verified=...)` 에 그대로 넘기면
+    목록이 미검증인 구간의 날짜를 조용히 '평일' 로 세지 않는다.
+    """
+    raw = json.loads(Path(path).read_text())
+    windows = [(a, b) for a, b in raw.get("verified_windows", [])]
+    return set(raw.get("holidays", {})), windows
 
 
 def load_cube(config: Config, dates: list[str], **key_parts) -> LoadedCube:
