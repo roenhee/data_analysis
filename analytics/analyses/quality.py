@@ -17,41 +17,16 @@ from analytics.metrics.load import load_quality_thresholds
 # 이탈 정의를 뒷받침하는 검사. 위반율이 아니라 **뒷받침율**로 뒤집어 낸다.
 EXIT_CHECK = "exit_without_appexit"
 
+# 임계치를 재는 수준. 버전은 접고 **서비스와 날짜는 남긴다.**
+WARNING_LEVEL = ("check_name", "service_code", "period")
 
-def _fold_warnings(raw: list[dict]) -> list[dict]:
-    """행 단위 경고를 (검사, 서비스) 단위로 접는다.
 
-    **실데이터에서만 드러난 문제다.** 경고는 서비스·버전·날짜마다 하나씩 나오고 앱
-    버전이 982개라, 15일치에서 18,973건 · 봉투 JSON 2.3 MB 가 됐다. 발행물마다 그게
-    붙고 사람은 읽지 못한다. 접으면 18건이다.
-
-    접는 축은 버전·날짜다. **서비스는 접지 않는다** — 한 서비스만 나쁜 경우가 평균에
-    묻히는 것이 이 검사들의 존재 이유다(실측 `top` 25.5% 대 나머지 1.2~7.1%).
-    몇 행이 임계치를 넘었는지 함께 내므로 조용히 잘라내는 것이 아니다.
-    """
-    folded: dict[tuple[str, str], dict] = {}
-    for one in raw:
-        key = (one["check_name"], one["service_code"])
-        seen = folded.get(key)
-        if seen is None:
-            folded[key] = {
-                "check_name": one["check_name"],
-                "service_code": one["service_code"],
-                "worst_ratio": one["ratio"],
-                "worst_app_version": one["app_version"],
-                # 최악 지점의 분모. 롱테일 버전이 세션 3건으로 100% 를 찍는 것과
-                # 주력 버전이 300만 중 100% 인 것은 완전히 다른 사건이다.
-                "worst_total": one["total"],
-                "threshold": one["threshold"],
-                "rows_over_threshold": 1,
-            }
-            continue
-        seen["rows_over_threshold"] += 1
-        if one["ratio"] > seen["worst_ratio"]:
-            seen["worst_ratio"] = one["ratio"]
-            seen["worst_app_version"] = one["app_version"]
-            seen["worst_total"] = one["total"]
-    return sorted(folded.values(), key=lambda w: -w["worst_ratio"])
+def _warnings(quality: pd.DataFrame, limits: dict[str, float]) -> list[dict]:
+    """`WARNING_LEVEL` 로 집계한 뒤 임계치를 댄다. 나쁜 순으로 낸다."""
+    level = [c for c in WARNING_LEVEL if c in quality.columns]
+    folded = quality.groupby(level, as_index=False)[["violated", "total"]].sum()
+    # 정렬은 안정적이다 — 비율이 같으면 groupby 의 키 순서를 지키므로 재현된다.
+    return sorted(quality_warnings(folded, limits), key=lambda w: -w["ratio"])
 
 
 @analysis("quality_report")
@@ -66,9 +41,18 @@ def quality_report(cubes: CubeSet, thresholds: dict[str, float] | None = None,
     `thresholds` 를 주지 않으면 shipped config 를 쓴다. 임계치가 없는 검사는 표에는
     나오지만 경고하지 않는다 — 측정된 기저 없이 임계치를 발명하지 않는다.
 
-    경고는 **(검사, 서비스) 단위**다. 서비스를 합치면 한 서비스만 나쁜 경우가 평균에
-    묻히고(실측 `top` 25.5% 대 나머지 1.2~7.1%), 버전·날짜까지 남기면 봉투가 2.3 MB
-    가 된다(실측 앱 버전 982개). `_fold_warnings` 참고.
+    **임계치는 버전을 접은 (검사, 서비스, 날짜) 비율에 댄다.** 임계치의 근거가 집계된
+    비율(실측 전체 22.0%, `top` 25.5%, 체류 커버리지 57~69%)이므로 같은 수준에서 재야
+    범주가 맞는다. 세션 3건짜리 버전의 100% 를 그 임계치에 대면 실측에서 경고가
+    18,973건 · 봉투 2.3 MB 가 되고 전부 롱테일이었다. 접으면 18건이고 전부 수천만
+    세션이 뒷받침한다 — `search` 의 체류 15일 내내 100%, `top` 의 나쁜 3일 32~38%.
+
+    **서비스는 접지 않는다.** 한 서비스만 나쁜 경우가 평균에 묻히는 것이 이 검사들의
+    존재 이유다(실측 `top` 25.5% 대 나머지 1.2~7.1%, 전체로 합치면 22.0% 라 안 걸린다).
+
+    맞바꿈: 버전을 접으면 **한 버전만 망가진 경우가 그 서비스의 일별 숫자에 희석된다.**
+    최소 물량 임계치를 발명하는 대신 이쪽을 택했다 — `app_version` 은 축이므로 버전
+    질문은 `cubes.filter(app_version=...)` 로 따로 묻는 종류다.
     """
     quality = cubes.quality
     if quality is None:
@@ -108,8 +92,6 @@ def quality_report(cubes: CubeSet, thresholds: dict[str, float] | None = None,
 
     return AnalysisResult(
         frame=frame, headline=headline, compare_key="check_name",
-        envelope=envelope_for(
-            cubes, coverage, _fold_warnings(quality_warnings(quality, limits))
-        ),
+        envelope=envelope_for(cubes, coverage, _warnings(quality, limits)),
         viz={"kind": "line", "x": "period"},
     )

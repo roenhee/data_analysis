@@ -72,32 +72,49 @@ def test_warnings_fire_above_the_configured_threshold():
     fired = [w for w in got.envelope["warnings"]
              if w["check_name"] == "session_no_screen"]
     # top 은 두 날 모두 넘고(0.255, 0.30) news 는 두 날 모두 안 넘는다(0.003, 0.005).
-    assert len(fired) == 1
-    assert fired[0]["service_code"] == "top"
-    assert fired[0]["rows_over_threshold"] == 2
-    assert fired[0]["worst_ratio"] == pytest.approx(0.30)
+    assert len(fired) == 2
+    assert {w["service_code"] for w in fired} == {"top"}
+    assert {w["period"] for w in fired} == {"2026-07-27", "2026-07-28"}
 
 
-def test_warnings_collapse_across_versions_and_dates():
-    """실측에서 앱 버전이 982개라 행 단위로 경고하면 18,973건 · 봉투 2.3 MB 가 된다.
+def test_the_service_is_not_folded_away():
+    """한 서비스만 나쁜 경우가 평균에 묻히는 것이 이 검사들의 존재 이유다.
 
-    한 서비스가 나쁜지는 알아야 하지만, 같은 (검사, 서비스) 를 버전·날짜마다 되풀이할
-    필요는 없다. 접고 나면 실측이 18건이다. 몇 행이 넘었는지는 함께 낸다 —
-    조용히 자르지 않는다.
+    실측 `top` 25.5% 대 나머지 1.2~7.1%. 서비스까지 합치면 전체가 22.0% 라 임계치
+    0.30 에 안 걸리는데, top 의 나쁜 날은 32~38% 다.
     """
-    many = [("2026-07-27", "top", "session_no_screen", 500, 1000)]
-    many += [(f"2026-07-{27 + d}", "top", "session_no_screen", 400 + v, 1000)
-             for d in (0, 1) for v in range(20)]
     got = get_analysis("quality_report")(
-        _cubes(many), thresholds={"session_no_screen": 0.10}
+        _cubes(), thresholds={"session_no_screen": 0.20}
     )
-    assert len(got.envelope["warnings"]) == 1
-    only = got.envelope["warnings"][0]
-    assert only["rows_over_threshold"] == 41
-    assert only["worst_ratio"] == pytest.approx(0.500)
-    assert only["worst_app_version"] == "9.5.1"
-    # 최악 지점의 분모까지 실어야 세션 3건짜리 100% 와 구분된다.
-    assert only["worst_total"] == pytest.approx(1000.0)
+    assert {w["service_code"] for w in got.envelope["warnings"]} == {"top"}
+
+
+def test_versions_are_folded_before_the_threshold_is_applied():
+    """임계치는 **집계된 비율**을 근거로 정해졌으니 집계된 비율에 대야 한다.
+
+    세션 3건짜리 버전의 100% 를 그 임계치에 갖다 대면 범주가 안 맞는다 — 실측에서
+    앱 버전이 982개라 그렇게 하면 경고 18,973건 · 봉투 2.3 MB 가 나왔고 전부 롱테일의
+    100% 였다. 여기서 그 서비스·날짜의 실제 비율은 103/1000003 = 0.01% 다.
+    """
+    tail = [
+        ("2026-07-27", "top", "session_no_screen", 100, 1_000_000),
+        ("2026-07-27", "top", "session_no_screen", 3, 3),
+    ]
+    got = get_analysis("quality_report")(
+        _cubes(tail), thresholds={"session_no_screen": 0.30}
+    )
+    assert got.envelope["warnings"] == []
+    assert got.frame["ratio"].iloc[0] == pytest.approx(103 / 1_000_003)
+
+
+def test_a_warning_carries_the_volume_behind_it():
+    got = get_analysis("quality_report")(
+        _cubes(), thresholds={"session_no_screen": 0.10}
+    )
+    fired = next(w for w in got.envelope["warnings"]
+                 if w["period"] == "2026-07-27")
+    assert fired["ratio"] == pytest.approx(255 / 1000)
+    assert fired["total"] == pytest.approx(1000.0)
 
 
 def test_thresholds_default_to_the_shipped_config():

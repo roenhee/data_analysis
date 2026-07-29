@@ -31,6 +31,25 @@ def test_a_warning_carries_its_denominator():
     assert got[0]["total"] == pytest.approx(1000.0)
 
 
+def test_a_warning_identifies_itself_with_whatever_keys_the_frame_has():
+    """호출자가 어느 수준으로 집계해 넘겼는지에 따라 식별 컬럼이 다르다.
+
+    버전을 접은 프레임에는 `app_version` 이 없고 `period` 가 있다. 없는 컬럼을 `None`
+    으로 채우면 "버전 미상" 처럼 읽히므로, 있는 것만 낸다.
+    """
+    folded = pd.DataFrame([
+        {"service_code": "top", "period": "2026-07-27",
+         "check_name": "null_action_name", "violated": 198, "total": 1000},
+    ])
+    got = quality_warnings(folded, thresholds={"null_action_name": 0.1})
+    assert got[0]["period"] == "2026-07-27"
+    assert "app_version" not in got[0]
+
+    raw = quality_warnings(_quality(), thresholds={"null_action_name": 0.1})
+    assert raw[0]["app_version"] == "9.5.1"
+    assert "period" not in raw[0]
+
+
 def test_warnings_stay_silent_below_the_threshold():
     assert quality_warnings(_quality(), thresholds={"session_no_screen": 0.5}) == []
 

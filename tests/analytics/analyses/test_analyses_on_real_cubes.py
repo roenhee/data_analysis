@@ -200,12 +200,45 @@ def test_every_published_result_carries_a_complete_envelope(config, real_results
 
 
 @needs_cubes
-def test_the_quality_envelope_stays_small_enough_to_publish(real_results):
-    """앱 버전이 982개라 접지 않으면 경고가 18,973건 · 봉투 JSON 2.3 MB 가 된다."""
+def test_quality_warnings_are_backed_by_volume_not_the_long_tail(real_results):
+    """버전(실측 982개)을 접지 않으면 경고 18,973건 · 봉투 2.3 MB 이고, 전부 세션 몇
+    건짜리 버전의 100% 였다. 접은 뒤에는 18건이고 전부 물량이 뒷받침한다.
+    """
     import json
 
     warnings = real_results["quality_report"].envelope["warnings"]
-    assert len(warnings) < 100, f"{len(warnings)}건 — 접히지 않았다"
+    assert len(warnings) < 100, f"{len(warnings)}건 — 집계 수준이 잘못됐다"
     assert len(json.dumps(warnings)) < 100_000
-    # 분모 없이 100% 를 읽으면 롱테일 버전을 주력 버전으로 오해한다.
-    assert all("worst_total" in w for w in warnings)
+    assert all({"period", "ratio", "total"} <= set(w) for w in warnings)
+    # 롱테일의 100% 가 사라졌다는 뜻: 비율 1.0 짜리는 전부 대형이다.
+    assert not [w for w in warnings if w["ratio"] >= 1.0 and w["total"] < 1000]
+
+
+@needs_cubes
+def test_the_search_dwell_gap_surfaces_as_the_loudest_warning(real_cubes, real_results):
+    """실측: `search` 는 체류가 15일 내내 100% 미측정이다(3억 6,754만 화면 방문).
+
+    이건 코드베이스가 이미 아는 사실("search 0%")인데, 버전 단위로 경고할 때는 세션
+    3건짜리 100% 뒤에 묻혀 있었다. 집계 수준을 맞추면 가장 큰 항목이 된다.
+    """
+    warnings = real_results["quality_report"].envelope["warnings"]
+    search = [w for w in warnings if w["check_name"] == "screen_without_dwell"
+              and w["service_code"] == "search"]
+    assert len(search) == len(real_cubes.present_dates)
+    assert all(w["ratio"] == pytest.approx(1.0) for w in search)
+    assert all(w["total"] > 1_000_000 for w in search)
+
+
+@needs_cubes
+def test_the_pooled_rate_would_hide_the_service_that_is_bad(real_results):
+    """서비스를 합치면 `session_no_screen` 이 22.0% 로 임계치 0.30 에 안 걸린다.
+
+    top 의 나쁜 날은 32~38% 다(하루 2,000만 세션대). 그래서 서비스는 접지 않는다.
+    """
+    got = real_results["quality_report"]
+    assert got.headline["worst_session_no_screen"] < 0.30
+    fired = [w for w in got.envelope["warnings"]
+             if w["check_name"] == "session_no_screen"]
+    assert fired, "top 의 나쁜 날이 경고에 없다"
+    assert {w["service_code"] for w in fired} == {"top"}
+    assert all(w["ratio"] > 0.30 and w["total"] > 1_000_000 for w in fired)

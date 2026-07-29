@@ -225,8 +225,10 @@ publish(config, flow, run_id="r1", analysis_type="screen_flow", title="MA 화면
   15개뿐이고 modularity 0.394 라, 노드 순서만 다른 같은 그래프에서 4개(Q=0.395878) 와
   3개(Q=0.394087) 가 나왔다. 어느 화면들이 함께 묶이는 경향인지는 읽을 수 있지만
   "군집이 정확히 N개" 는 이 데이터가 답할 질문이 아니다.
-- Reading a `quality_report` warning's ratio without its `worst_total`. 롱테일 앱
-  버전(실측 982개)은 세션 몇 건으로 100% 를 찍는다.
+- Reading a `quality_report` warning as being about one app version. 경고는 **버전을
+  접은 (검사, 서비스, 날짜)** 비율이다 — 임계치의 근거가 집계된 비율이라 같은 수준에서
+  잰다. 그래서 한 버전만 망가진 경우는 그 서비스의 일별 숫자에 희석된다. 버전 질문은
+  `cubes.filter(app_version=...)` 로 따로 묻는다.
 - Passing the busiest screen pair to `reachability`. 실측에서 가장 굵은 쌍은
   `top/엠탑조회` → 자기 자신인 자기 루프이고, `reachability` 가 거부한다.
 - Hand-assembling a `CubeSet` with `present_dates=dates`. That claims a partial build is
