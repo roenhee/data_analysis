@@ -243,3 +243,97 @@ def test_the_pooled_rate_would_hide_the_service_that_is_bad(real_cubes, real_res
     # 상시 표시다 — 정상 변동의 상위 몇 일만이 아니라 매일 걸려야 한다.
     assert len(fired) == len(real_cubes.present_dates)
     assert all(w["ratio"] > 0.15 and w["total"] > 1_000_000 for w in fired)
+
+
+@needs_cubes
+def test_the_session_cube_is_additive_except_uv(real_cubes):
+    """`session_trend` 의 슬라이스 fallback 이 서 있는 바닥. 실큐브로 직접 검산한다.
+
+    전체 조합 행을 합한 값이 `(period)` 롤업 행과 **부동소수 정밀도까지** 같아야
+    가산이라고 말할 수 있다. 실측 15일 전부 배율 1.000000 이다 —
+    `sessions`·`pv`·`events`·`duration_sum`. `uv` 만 1.68~1.76배로 부푼다(같은 사람이
+    여러 칸에 들어가므로). 그래서 fallback 은 넷을 합하고 `uv` 는 NaN 으로 둔다.
+    """
+    from analytics.metrics.descriptive import SESSION_AXES
+    from analytics.metrics.frame import full_combination_rows, rollup_rows
+
+    session = real_cubes.session
+    folded = tuple(a for a in SESSION_AXES if a != "period")
+    uv_ratios = []
+    for day in real_cubes.present_dates:
+        one = session[session["period"] == day]
+        roll = rollup_rows(one, SESSION_AXES, folded=folded).iloc[0]
+        full = full_combination_rows(one, SESSION_AXES)
+        for measure in ("sessions", "pv", "events", "duration_sum"):
+            assert float(full[measure].sum()) == float(roll[measure]), (day, measure)
+        uv_ratios.append(float(full["uv"].sum()) / float(roll["uv"]))
+    assert min(uv_ratios) > 1.65 and max(uv_ratios) < 1.80
+
+
+@needs_cubes
+def test_the_rollup_rows_would_inflate_the_stratum_volume_eightfold(real_cubes):
+    """롤업 행을 함께 세면 하루 프레임에서 물량이 **정확히 8배**가 된다.
+
+    손으로 만든 픽스처는 접은 축이 하나라 2배였다. 실큐브는 grouping set 이 8개다 —
+    `decompose` 가 표에 싣는 `a_cnt` 는 사람이 읽는 절대 물량이라 8배로 실리면 안 된다.
+
+    15일치를 이어붙인 프레임은 9.0배다(파일마다 날짜까지 접은 `()` 행이 하나 더 있어
+    period NULL 행이 15개 된다). 그래서 하루로 잘라 재는 이 테스트가 8을 본다.
+    """
+    from analytics.metrics.descriptive import SESSION_AXES
+    from analytics.metrics.frame import full_combination_rows
+
+    one = real_cubes.session
+    one = one[one["period"] == real_cubes.present_dates[-1]]
+    full = full_combination_rows(one, SESSION_AXES)
+    assert float(one["sessions"].sum()) / float(full["sessions"].sum()) == 8.0
+
+
+@needs_cubes
+def test_the_session_cube_version_comparison_moves_opposite_to_the_flow_one(real_cubes):
+    """실측 회귀 그물 — 세션 큐브에서 처음 물어본 질문이다: 9.5.1 에서 체류가 올랐나.
+
+    **내려갔다.** 세션당 체류는 합산 −18.8%, 날짜별 −43.7/−11.5/−7.2% 로 사흘 다 음수다.
+    같은 두 버전의 기대 걸음 수는 +4~7% 였다(위 `screen_flow` 테스트) — **두 지표가
+    반대로 움직인다.** 9.5.1 세션은 화면을 더 많이 밟으면서 더 짧게 머문다.
+
+    다만 이 비교는 그대로 읽으면 안 된다: `weight_skew` 0.51 이고, `within` −28.0% 는
+    거의 전부 07-26 에서 온다 — 그날 9.5.1 은 56만 세션, 9.5.0 은 1,440만으로 25:1 이라
+    배포일 컷오프를 지나고도 램프업 첫날의 소수 집단을 재고 있다. 고정할 것은 크기가
+    아니라 **부호와 그 취약함**이다.
+    """
+    ma = real_cubes.filter(service_type="MA")
+    got = compare(ma, "session_trend", on="app_version", a="9.5.1", b="9.5.0",
+                  released=load_releases())
+    assert got.dates_used == ["2026-07-26", "2026-07-27", "2026-07-28"]
+
+    per_day = got.per_day["delta_seconds_per_session"]
+    assert (per_day < 0).all(), "사흘 다 체류가 내려갔다"
+    pooled = got.pooled["seconds_per_session"]
+    assert per_day.min() < pooled < per_day.max()
+    assert got.weight_skew > 0.5, "버전이 서로 다른 날에 몰려 있어야 한다"
+
+    split = decompose(ma, got, by=["period"], metric="seconds_per_session")
+    assert split.within < pooled < 0, "구성 변화가 델타를 완화하는 쪽으로 작용한다"
+    assert split.between > 0
+    assert split.within + split.between == pytest.approx(pooled, abs=1e-9)
+
+    # 램프업 첫날의 물량 불균형이 `within` 을 끌고 간다 — 그게 이 비교의 약점이다.
+    ramp = split.per_stratum.set_index("period").loc["2026-07-26"]
+    assert ramp["b_cnt"] / ramp["a_cnt"] > 20
+
+
+@needs_cubes
+def test_a_version_slice_reports_uv_as_unavailable_on_real_cubes(real_cubes):
+    """실큐브에서도 슬라이스는 `uv` 를 못 읽는다 — 0 이 아니라 NaN 이고 봉투가 말한다."""
+    got = get_analysis("session_trend")(
+        real_cubes.filter(service_type="MA", app_version="9.5.1")
+    )
+    assert got.frame["uv"].isna().all()
+    assert got.frame["sessions_per_user"].isna().all()
+    assert [w["check_name"] for w in got.envelope["warnings"]] == [
+        "uv_unavailable_for_this_slice"
+    ]
+    # 가산 측정값은 그대로 나온다 — 슬라이스라고 분석이 죽지 않는다.
+    assert got.headline["sessions"] > 1_000_000
+    assert 100 < got.headline["seconds_per_session"] < 600

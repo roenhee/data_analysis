@@ -83,7 +83,7 @@ partition.
 
 | 이름 | 큐브 | 프레임 | `headline` | 파라미터 |
 |---|---|---|---|---|
-| `session_trend` | session | 날짜별 UV·PV·세션·체류 | `sessions`·`pv_per_session`·`seconds_per_session` | `holidays` |
+| `session_trend` | session | 날짜별 UV·PV·세션·체류 (세그먼트로 자르면 `uv` 는 NaN, 봉투에 경고) | `sessions`·`pv_per_session`·`seconds_per_session` | `holidays` |
 | `screen_dwell_rank` | transition | 화면별 방문당 체류 순위 | `mean_seconds_per_visit`·`dwell_coverage` | `warn_below` |
 | `screen_flow` | transition | 화면별 이탈·정상분포·기대 걸음 수·엔트로피·PageRank | `mean_expected_steps`·`mean_exit_prob` | `exit_within`·`damping` |
 | `reachability` | transition | k 걸음 안에 목표 화면에 닿을 확률 곡선 | `p_hit_within_{max_k}` | `source`·`target`·`max_k` **(필수)** |
@@ -92,6 +92,13 @@ partition.
 
 `headline` 이 있어야 연산자가 걸린다. 새 분석을 만들 때 `headline` 을 비우면 그 분석만
 비교에서 빠진다.
+
+**세션 큐브 분석도 `compare`·`decompose` 에 걸린다.** 세그먼트로 자르면 `(period)` 롤업
+행이 사라지지만(접힌 축이 NULL 이라 값으로 필터하면 빠진다) 비가산인 것은 `uv` 하나뿐이라
+`sessions`·`pv`·`events`·`duration_sum` 은 전체 조합 행을 합해 낸다 — 실큐브 15일 전부
+배율 1.000000 이다. `uv` 만 1.68~1.76배로 부풀어서 슬라이스에서는 NaN 이고, 봉투에
+`uv_unavailable_for_this_slice` 가 실린다. **버전별 `uv` 가 필요하면** 세션 큐브에
+`(period, app_version)` grouping set 을 추가해 다시 빌드해야 한다 — 그때만 하는 일이다.
 
 **PMI 는 아직 이름 붙은 분석이 없다.** `metrics.markov.pointwise_mutual_information` 은
 있지만 쌍(from, to) 단위라 화면 한 줄짜리 프레임에 안 들어간다 — 넣으려면 "어느 셀부터
@@ -182,13 +189,32 @@ publish(config, flow, run_id="r1", analysis_type="screen_flow", title="MA 화면
 대조군: 성별 비교(F vs M)는 15일 내내 −26.1%~−21.0% 로 부호가 안 바뀌고 `weight_skew`
 0.009 다. 성별은 날짜에 고루 퍼져 있어 합산이 날짜별과 같은 자리에 있다.
 
+### 같은 두 버전, 세션 큐브 — 체류는 **반대로** 움직인다
+
+`seconds_per_session` (같은 좌표: MA, 배포일 이후 3일):
+
+| | 값 |
+|---|---|
+| 날짜별 (07-26/27/28) | **−43.7% / −11.5% / −7.2%** |
+| 합산 | **−18.8%** |
+| `within` / `between` | **−28.0% / +9.2%** |
+| `weight_skew` | 0.51 |
+
+기대 걸음 수는 +4~7% 인데 세션당 체류는 사흘 다 음수다 — 9.5.1 세션은 화면을 더 많이
+밟으면서 더 짧게 머문다. **그대로 인용하지 말 것:** `within` −28.0% 는 거의 전부 07-26
+에서 온다. 그날 9.5.1 은 56만 세션, 9.5.0 은 1,440만으로 25:1 이라 배포일 컷오프를
+지나고도 램프업 첫날의 소수 집단을 재고 있다. 읽을 수 있는 것은 **부호**이고, 크기는
+07-28(−7.2%, 두 버전 물량이 가장 가까운 날)을 함께 봐야 한다.
+
 ## Rules that are enforced in code
 
 - **`require_complete()` before any ratio, mean, or probability.** `read_cube` returns
   whatever dates exist; asking for 30 days and getting 3 otherwise yields a plausible
   number with the wrong denominator and no signal.
 - **Never sum `uv`.** It is not additive — on a real cube, summing overstates it by
-  1.71x. `additive_sum` refuses it; read the cube's rollup row instead.
+  1.68~1.76x (15일 실측). `additive_sum` refuses it; read the cube's rollup row instead.
+  세그먼트 슬라이스에는 그 롤업 행이 없으므로 `session_trend` 는 `uv` 를 **NaN** 으로
+  내고 봉투에 `uv_unavailable_for_this_slice` 를 싣는다 — 0 으로 채우지 않는다.
 - **Never sum the session cube raw.** It holds `GROUPING SETS` rollup rows in the same
   file, and summing counts each session about 9 times. Go through
   `full_combination_rows` or `rollup_rows`.

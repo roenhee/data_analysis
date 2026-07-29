@@ -88,3 +88,42 @@ def test_the_frame_carries_the_duration_the_headline_is_built_from():
     """비율만 내면 소비자가 headline 을 검산할 수 없다."""
     got = get_analysis("session_trend")(_cubes()).frame.set_index("period")
     assert int(got.loc["2026-07-27", "duration_sum"]) == 60000
+
+
+def test_a_segment_slice_still_gives_the_additive_measures():
+    """버전으로 자르면 `(period)` 롤업 행이 사라진다. 가산 측정값은 그대로 낼 수 있다."""
+    from tests.analytics.analyses.test_compare_on_session_cubes import _cubes
+
+    sliced = _cubes().filter(app_version="9.5.1")
+    got = get_analysis("session_trend")(sliced).frame.set_index("period")
+    # 전체 조합 행만 합한다: gender M 100 + F 100 = 200 (gender 접은 200 을 더하면 400)
+    assert int(got.loc["2026-07-27", "sessions"]) == 200
+    assert int(got.loc["2026-07-27", "duration_sum"]) == 132_000
+    assert got.loc["2026-07-27", "seconds_per_session"] == pytest.approx(660.0)
+
+
+def test_uv_is_nan_on_a_slice_rather_than_a_sum():
+    """`uv` 를 합하면 실측 1.71배로 부푼다. 모르는 것은 NaN 이다."""
+    from tests.analytics.analyses.test_compare_on_session_cubes import _cubes
+
+    sliced = _cubes().filter(app_version="9.5.1")
+    got = get_analysis("session_trend")(sliced)
+    assert got.frame["uv"].isna().all()
+    assert pd.isna(got.frame["sessions_per_user"].iloc[0])
+
+
+def test_the_envelope_says_uv_could_not_be_read_for_the_slice():
+    from tests.analytics.analyses.test_compare_on_session_cubes import _cubes
+
+    sliced = _cubes().filter(app_version="9.5.1")
+    got = get_analysis("session_trend")(sliced)
+    assert [w["check_name"] for w in got.envelope["warnings"]] == [
+        "uv_unavailable_for_this_slice"
+    ]
+
+
+def test_an_unsliced_cube_still_reads_uv_from_the_rollup_row():
+    """fallback 이 생겼다고 자르지 않은 경우까지 합산으로 가면 안 된다."""
+    got = get_analysis("session_trend")(_cubes()).frame.set_index("period")
+    assert int(got.loc["2026-07-27", "uv"]) == 60
+    assert not get_analysis("session_trend")(_cubes()).envelope["warnings"]

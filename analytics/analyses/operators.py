@@ -12,10 +12,8 @@ import pandas as pd
 
 from analytics.analyses.base import AnalysisResult, CubeSet, get_analysis
 from analytics.metrics.compare import comparable_dates, weight_skew
-
-# 층의 물량을 세는 컬럼. 전이 큐브의 이름이다 — 세션 큐브를 분해하려면 여기가 아니라
-# 큐브별 측도 선택이 먼저 필요하다(지금은 막는다, `decompose` 참고).
-VOLUME_COLUMN = "cnt"
+from analytics.metrics.descriptive import SESSION_AXES
+from analytics.metrics.frame import full_combination_rows
 
 
 @dataclass(frozen=True)
@@ -53,13 +51,30 @@ def _delta(a: dict[str, float], b: dict[str, float]) -> dict[str, float]:
     return out
 
 
-def _primary_cube(cubes: CubeSet) -> pd.DataFrame:
-    """비교의 날짜·물량을 세는 기준 큐브."""
+def _volume_frame(cubes: CubeSet) -> tuple[pd.DataFrame, str]:
+    """날짜·층 가중치를 셀 프레임과 그 컬럼.
+
+    전이 큐브는 `cnt`, 세션 큐브는 `sessions` 다. **세션 큐브는 전체 조합 행만 쓴다** —
+    `GROUPING SETS` 롤업 행이 같은 파일에 있어서 그냥 세면 grouping set 수만큼 부푼다.
+    비중만 보는 `weight_skew` 는 그 부풀림에 둔감할 수 있지만, `decompose` 가 표에
+    싣는 `a_cnt`·`b_cnt` 는 사람이 읽는 절대 물량이라 틀리면 안 된다.
+    """
     if cubes.transition is not None:
-        return cubes.transition
-    if cubes.session is not None:
-        return cubes.session
-    raise ValueError("no cube to compare on: both transition and session are absent")
+        frame, measure, which = cubes.transition, "cnt", "transition"
+    elif cubes.session is not None:
+        frame = full_combination_rows(cubes.session, SESSION_AXES)
+        measure, which = "sessions", "session"
+    else:
+        raise ValueError(
+            "no cube to compare on: both transition and session are absent"
+        )
+    if measure not in frame.columns:
+        raise ValueError(
+            f"the {which} cube has no {measure!r} column "
+            f"(has: {', '.join(map(str, frame.columns))}); weighting by zero would "
+            "report the whole delta as composition rather than refusing"
+        )
+    return frame, measure
 
 
 def compare(
@@ -82,7 +97,7 @@ def compare(
       보여준다. 4건짜리 날의 −79.1% 는 표를 보면 즉시 쓰레기라는 게 보인다.
     """
     fn = get_analysis(analysis_name)
-    cube = _primary_cube(cubes)
+    cube, measure = _volume_frame(cubes)
     days = comparable_dates(cube, on, a, b, released=released)
     reason = "overlap of both segments"
     if released and any(released.get(v) for v in (a, b)):
@@ -117,7 +132,7 @@ def compare(
     return Comparison(
         pooled=pooled,
         per_day=per_day,
-        weight_skew=weight_skew(cube, on, a, b, released=released),
+        weight_skew=weight_skew(cube, on, a, b, measure=measure, released=released),
         dates_used=days,
         date_reason=reason,
         sign_disagrees=disagrees,
@@ -163,13 +178,7 @@ def decompose(
     a = comparison.result.envelope["comparison"]["a"]
     b = comparison.result.envelope["comparison"]["b"]
     fn = get_analysis(comparison.analysis_name)
-    cube = _primary_cube(cubes)
-    if VOLUME_COLUMN not in cube.columns:
-        raise ValueError(
-            f"decompose weights strata by {VOLUME_COLUMN!r} and this cube has none "
-            f"(columns: {', '.join(map(str, cube.columns))}); weighting by zero would "
-            "report the whole delta as composition rather than refusing"
-        )
+    cube, measure = _volume_frame(cubes)
     scoped = cubes.filter(dates=comparison.dates_used)
 
     rows = []
@@ -179,8 +188,8 @@ def decompose(
         sel = dict(zip(by, keys))
         one = scoped.filter(**sel)
         sa, sb = one.filter(**{on: a}), one.filter(**{on: b})
-        ca = float(_primary_cube(sa)[VOLUME_COLUMN].sum())
-        cb = float(_primary_cube(sb)[VOLUME_COLUMN].sum())
+        ca = float(_volume_frame(sa)[0][measure].sum())
+        cb = float(_volume_frame(sb)[0][measure].sum())
         if ca <= 0 or cb <= 0:
             rows.append({**sel, "a_cnt": ca, "b_cnt": cb, "delta": np.nan})
             continue
