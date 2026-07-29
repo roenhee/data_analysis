@@ -109,3 +109,62 @@ def screen_flow(cubes: CubeSet, exit_within: tuple[int, ...] = (),
         ),
         viz={"kind": "bar", "x": "state"},
     )
+
+
+@analysis("reachability")
+def reachability(cubes: CubeSet, source: str, target: str, max_k: int = 10,
+                 **_) -> AnalysisResult:
+    """`source` 에서 `target` 에 **k 걸음 안에** 닿을 확률의 곡선.
+
+    노트북의 "홈 → 뉴스뷰 도달 속도" 가 이 형태였다. 기대 걸음 수 하나로는 "빠르게
+    닿는 소수 + 안 닿는 다수" 와 "다들 중간에 닿는다" 가 구분되지 않는다.
+
+    **목표를 흡수 상태로 바꾼 뒤 거듭제곱한다.** 안 그러면 `P^k` 의 목표 열은 "정확히
+    k 걸음 뒤 그 화면에 있다" 가 되어, 닿았다가 떠난 경우가 빠지고 곡선이 내려간다 —
+    "3걸음 안에 닿을 확률이 2걸음 안보다 낮다" 는 있을 수 없는 답이 나온다.
+
+    `max_k` 기본값 10 은 화면 수의 표시 지평이다. 실측 기대 걸음 수가 11.5~13.2 이라
+    한 세션 대부분을 덮는다. 곡선 전체가 프레임에 있으므로 이 값이 정보를 숨기지는
+    않는다 — `headline` 이 어느 지평의 값인지만 정한다.
+    """
+    edges = cubes.transition
+    if edges is None:
+        raise ValueError("reachability needs the transition cube; it is absent")
+    if max_k < 1:
+        raise ValueError(f"max_k must be at least 1, got {max_k}")
+    if source == target:
+        raise ValueError(
+            f"source and target are both {source!r}; 'reaching' a screen you are "
+            "already on is 1.0 at every k and says nothing"
+        )
+    P = transition_matrix(edges)
+    for role, state in (("source", source), ("target", target)):
+        if state not in P.states:
+            raise KeyError(
+                f"unknown {role} state: {state!r}; this chain has "
+                f"{len(P.states)} states"
+            )
+
+    absorbed = P.matrix.copy()
+    target_index = P.states.index(target)
+    absorbed[target_index] = 0.0
+    absorbed[target_index, target_index] = 1.0
+
+    source_index = P.states.index(source)
+    powered = np.eye(len(P.states))
+    rows = []
+    for k in range(1, max_k + 1):
+        powered = powered @ absorbed
+        rows.append({"source": source, "target": target, "k": k,
+                     "p_hit_within": float(powered[source_index, target_index])})
+    frame = pd.DataFrame(rows)
+
+    return AnalysisResult(
+        frame=frame,
+        headline={f"p_hit_within_{max_k}": float(frame["p_hit_within"].iloc[-1])},
+        compare_key="k",
+        envelope=envelope_for(
+            cubes, {"dwell": dwell_coverage(edges)}, _thin_cell_warning(edges)
+        ),
+        viz={"kind": "line", "x": "k"},
+    )
