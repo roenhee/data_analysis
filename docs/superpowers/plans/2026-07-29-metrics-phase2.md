@@ -595,6 +595,10 @@ def transition_matrix(edges: pd.DataFrame) -> TransitionMatrix:
     행 합은 반드시 1이다. 나가는 엣지가 없는 상태(EXIT 포함)는 자기 루프를 준다 —
     행 합이 1이 아니면 stationary·expected steps 가 전부 조용히 틀린다.
     """
+    # 완전히 빈 프레임은 컬럼조차 없어서 `edges["cnt"]` 가 KeyError 를 낸다.
+    # 큐브에서 읽은 빈 결과는 컬럼이 있고 행이 0이다. 둘 다 같은 뜻이므로 같이 처리한다.
+    if edges.empty or "cnt" not in edges.columns:
+        raise ValueError("no transitions: the frame is empty")
     used = edges[edges["cnt"] > 0]
     if used.empty:
         raise ValueError("no transitions: the frame has no rows with cnt > 0")
