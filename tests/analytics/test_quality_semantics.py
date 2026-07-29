@@ -153,6 +153,37 @@ def test_screen_other_ratio_is_measured_against_pageview_rows_only():
     assert (violated, total) == (1, 2)
 
 
+def test_screen_without_dwell_counts_visits_missing_a_usage_row():
+    """체류 커버리지 감시. 분모는 화면 방문 수, 분자는 체류가 없던 방문 수다.
+
+    `search` 는 실측 커버리지가 0% 라 이 검사가 total 과 같은 violated 를 낸다.
+    """
+    ev = _ev(
+        [
+            # 방문 1: 체류 있음
+            ("2026-07-27 10:00", "Pageview", "ViewPage", "홈탭_진입", "home"),
+            ("2026-07-27 10:01", "Usage", "UsagePage", "홈탭_진입", "home"),
+            # 방문 2: 체류 없음
+            ("2026-07-27 10:05", "Pageview", "ViewPage", "콘텐츠탭_진입", "content"),
+            # 방문 3: 체류 없음
+            ("2026-07-27 10:09", "Pageview", "ViewPage", "홈탭_진입", "home"),
+        ]
+    )
+    violated, total = _check(_run(ev, "2026-07-27", WINDOW_27), "screen_without_dwell")
+    assert (violated, total) == (2, 3)
+
+
+def test_dwell_coverage_ignores_usage_rows_that_are_not_usagepage():
+    ev = _ev(
+        [
+            ("2026-07-27 10:00", "Pageview", "ViewPage", "홈탭_진입", "home"),
+            ("2026-07-27 10:01", "Usage", "UsageSession", "홈탭_진입", "home"),
+        ]
+    )
+    violated, total = _check(_run(ev, "2026-07-27", WINDOW_27), "screen_without_dwell")
+    assert (violated, total) == (1, 1)
+
+
 def test_sessions_are_attributed_to_the_first_event_day():
     # 첫 이벤트가 D 인 세션만 세션 검사에 든다.
     ev = _ev(

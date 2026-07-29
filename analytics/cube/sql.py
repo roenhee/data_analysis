@@ -50,7 +50,10 @@ def _event_cte(
         "    common.page AS page,\n"
         "    click.layer1 AS layer1,\n"
         "    click.layer2 AS layer2,\n"
-        "    try(cast(usage.duration AS double)) AS usage_duration\n"
+        # 원천은 **밀리초**다. 증거: `top` 하루치 최대값이 10,799,978 = 정확히 3시간으로
+        # 서버측 상한값이고(초로 보면 125일), 중앙값 5,285 = 5.3초다. 이름에 단위를 박아
+        # 세션 큐브의 `duration_sum`(date_diff 초)과 섞이지 않게 한다.
+        "    try(cast(usage.duration AS double)) AS usage_duration_ms\n"
         f"  FROM {events_table}\n"
         f"  LEFT JOIN {demography_table} d ON d.uuid = user.uuid\n"
         f"  WHERE {conds}\n"
@@ -147,6 +150,26 @@ def build_transition_cube_sql(
     세션 모집단과 축 좌표는 `build_session_cube_sql` 과 **같은 첫-이벤트 귀속**을 쓴다
     (`kept` 가 `screens` 가 아니라 `ev` 에서 나온다). Pageview 없는 세션은 `screens` 와의
     조인에서 자연히 빠지므로 따로 거를 필요가 없다.
+
+    **체류시간은 Pageview 행에 없다.** 실측(2026-07-27, `top`): Pageview 1억 7,214만 행의
+    `usage.duration` 비NULL이 **0건**이고, 체류는 전부 `Usage`+`UsagePage` 행(1억 3,923만 중
+    99.9%)에 실린다. 그래서 두 신호를 한 스트림으로 합친 뒤 `visit_idx`(그 행까지의 Pageview
+    수)로 **각 Usage 행을 직전 화면 방문에 묶는다**. 방문 하나가 여러 Usage 행을 낼 수 있어
+    (`media` 는 Pageview 대비 107%) 방문 단위로 먼저 합친다.
+
+    `cnt` 는 이 변경의 영향을 받지 않는다 — 상태를 만드는 것은 여전히 Pageview 행뿐이다.
+
+    `dur_sum` 의 단위는 **초**다. 원천 `usage.duration` 은 밀리초이므로 1000으로 나눈다
+    (증거는 `_event_cte` 의 주석). 세션 큐브의 `duration_sum` 과 같은 단위다.
+
+    **`dur_n` 을 반드시 같이 읽어라.** 체류 커버리지는 축마다 다르다(실측: `search` 0%,
+    `top` 웹 65.6%, `top` android 84.8%, `media` 107%). `dur_sum / cnt` 는 커버리지만큼
+    조용히 축소된 값이므로 **틀렸다**. 옳은 값은 `dur_sum / dur_n` 이고, 이는 "체류가
+    측정된 방문"에 대한 조건부 평균이다. `dur_n / cnt` 가 그 셀의 커버리지다.
+
+    **얇은 셀의 체류는 믿지 마라.** 실측 엣지 셀의 cnt 중앙값은 9이고 18.9%는 1이다.
+    엣지 단위 평균 체류는 두꺼운 셀에서만 의미가 있다. `dur_sum`·`dur_n` 은 둘 다 가산이니
+    필요하면 `to_state` 로 합쳐 화면 단위(중앙값 5.6배)로 올려서 본다.
     """
     axes = CORE_AXIS_NAMES
     axis_cols = "k." + ", k.".join(axes)
@@ -170,14 +193,43 @@ def build_transition_cube_sql(
         f"    {_first_event_axes()}\n"
         + _first_event_attribution(date)
         + "),\n"
-        "screens AS (\n"
-        "  SELECT uuid, suid, ts, usage_duration,\n"
-        f"    {screen_expr} AS state\n"
+        # 화면 신호(Pageview)와 체류 신호(Usage/UsagePage)를 한 스트림으로 합친다.
+        "stream AS (\n"
+        "  SELECT uuid, suid, ts,\n"
+        f"    CASE WHEN action_type = 'Pageview' THEN {screen_expr} END AS state,\n"
+        # ms -> 초. 세션 큐브의 duration_sum 과 같은 단위여야 두 큐브를 같이 읽는다.
+        "    CASE WHEN action_type = 'Usage'\n"
+        "         THEN usage_duration_ms / 1000.0 END AS dwell,\n"
+        "    CASE WHEN action_type = 'Pageview' THEN 1 ELSE 0 END AS is_screen\n"
         "  FROM ev\n"
         "  WHERE action_type = 'Pageview'\n"
+        "     OR (action_type = 'Usage' AND action_kind = 'UsagePage')\n"
+        "),\n"
+        # 각 행을 직전 화면 방문에 묶는다. 같은 ts 면 Pageview 가 먼저 와야 그 방문에
+        # 붙는다 — 안 그러면 체류가 앞 방문으로 새어 간다.
+        "marked AS (\n"
+        "  SELECT uuid, suid, ts, state, dwell, is_screen,\n"
+        "    sum(is_screen) OVER (PARTITION BY uuid, suid ORDER BY ts, is_screen DESC\n"
+        "      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS visit_idx\n"
+        "  FROM stream\n"
+        "),\n"
+        # 방문 하나가 여러 UsagePage 행을 낼 수 있으므로 방문 단위로 먼저 합친다.
+        # visit_idx = 0 은 첫 화면보다 앞선 Usage 행이라 귀속할 방문이 없다.
+        "visit_dwell AS (\n"
+        "  SELECT uuid, suid, visit_idx, sum(dwell) AS dwell_sum\n"
+        "  FROM marked\n"
+        "  WHERE is_screen = 0 AND visit_idx > 0 AND dwell IS NOT NULL\n"
+        "  GROUP BY uuid, suid, visit_idx\n"
+        "),\n"
+        "screens AS (\n"
+        "  SELECT m.uuid, m.suid, m.ts, m.state, v.dwell_sum\n"
+        "  FROM marked m\n"
+        "  LEFT JOIN visit_dwell v\n"
+        "    ON v.uuid = m.uuid AND v.suid = m.suid AND v.visit_idx = m.visit_idx\n"
+        "  WHERE m.is_screen = 1\n"
         "),\n"
         "seq AS (\n"
-        "  SELECT s.uuid, s.suid, s.ts, s.state, s.usage_duration,\n"
+        "  SELECT s.uuid, s.suid, s.ts, s.state, s.dwell_sum,\n"
         # `screens` 와 `kept` 가 둘 다 uuid/suid 를 내보내므로 반드시 한정해야 한다.
         # 한정하지 않으면 Trino/DuckDB 모두 "Ambiguous reference" 로 죽는다.
         "    row_number() OVER (PARTITION BY s.uuid, s.suid ORDER BY s.ts) AS rn,\n"
@@ -188,10 +240,13 @@ def build_transition_cube_sql(
         "),\n"
         "edges AS (\n"
         "  SELECT uuid, suid, state AS from_state,\n"
-        "         coalesce(next_state, 'EXIT') AS to_state, usage_duration\n"
+        "         coalesce(next_state, 'EXIT') AS to_state, dwell_sum\n"
         "  FROM seq\n"
         "  UNION ALL\n"
-        "  SELECT uuid, suid, 'START' AS from_state, state AS to_state, 0.0\n"
+        # START 는 화면이 아니라 체류가 없다. 첫 화면의 체류를 여기 붙이면 같은 체류가
+        # START 엣지와 그 화면의 출발 엣지에 두 번 들어간다.
+        "  SELECT uuid, suid, 'START' AS from_state, state AS to_state,\n"
+        "         CAST(NULL AS double)\n"
         "  FROM seq WHERE rn = 1\n"
         ")\n"
         "SELECT\n"
@@ -199,7 +254,10 @@ def build_transition_cube_sql(
         "  e.from_state,\n"
         "  e.to_state,\n"
         "  count(*) AS cnt,\n"
-        "  coalesce(sum(e.usage_duration), 0) AS dur_sum\n"
+        "  coalesce(sum(e.dwell_sum), 0) AS dur_sum,\n"
+        # 체류가 측정된 방문 수. `dur_sum / dur_n` 이 조건부 평균이고,
+        # `dur_n / cnt` 가 이 셀의 체류 커버리지다.
+        "  count(e.dwell_sum) AS dur_n\n"
         "FROM edges e\n"
         "JOIN kept k ON k.uuid = e.uuid AND k.suid = e.suid\n"
         f"GROUP BY {axis_cols}, e.from_state, e.to_state\n"
@@ -213,6 +271,7 @@ QUALITY_CHECKS = (
     "session_no_screen",
     "page_name_ambiguous",
     "session_span_exceeds_timeout",
+    "screen_without_dwell",
 )
 
 
@@ -240,6 +299,14 @@ def build_quality_cube_sql(
 
     `screen_other_ratio` 는 `/other` 로 접히는 비율의 **하한**이다. 사전에 없는 이름도
     `/other` 로 접히지만 이 쿼리는 state 사전을 모르므로 NULL 이름만 센다.
+
+    `screen_without_dwell` 은 체류가 측정되지 않은 화면 방문 비율이다(분모 = 방문 수).
+    체류 커버리지가 축마다 크게 다르기 때문에(실측: `search` 0%, `top` 웹 65.6%,
+    `top` android 84.8%) 두 세그먼트의 체류를 비교해도 되는지는 이 검사로 판단한다.
+    **유효 조건은 "커버리지가 높다"가 아니라 "비교 대상 둘의 커버리지가 같다"** 이다 —
+    65.6%짜리 웹끼리의 버전 비교는 유효하고, 88% android 와 66% 웹의 비교는 무효다.
+    셀 단위의 정확한 커버리지는 transition 큐브의 `dur_n / cnt` 를 쓴다. 이 검사는
+    그보다 거친 일별·서비스별 추세 감시용이다(단일 파티션이라 자정 횡단 방문은 절단된다).
     """
     where = (
         f"date_id IN ({_in_list(window_dates)})\n"
@@ -310,6 +377,33 @@ def build_quality_cube_sql(
         "    count(*) AS total,\n"
         "    count_if(action_name IS NULL) AS screen_other_ratio\n"
         "  FROM day WHERE action_type = 'Pageview' GROUP BY 1, 2\n"
+        "),\n"
+        # 체류 커버리지. transition 큐브의 방문 귀속과 같은 규칙으로 센다.
+        "dwell_stream AS (\n"
+        "  SELECT service_code, app_version, uuid, suid, ts,\n"
+        "    CASE WHEN action_type = 'Pageview' THEN 1 ELSE 0 END AS is_screen,\n"
+        "    CASE WHEN action_type = 'Usage' THEN 1 ELSE 0 END AS is_dwell\n"
+        "  FROM day\n"
+        "  WHERE action_type = 'Pageview'\n"
+        "     OR (action_type = 'Usage' AND action_kind = 'UsagePage')\n"
+        "),\n"
+        "dwell_marked AS (\n"
+        "  SELECT service_code, app_version, uuid, suid, is_dwell,\n"
+        "    sum(is_screen) OVER (PARTITION BY uuid, suid ORDER BY ts, is_screen DESC\n"
+        "      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS visit_idx\n"
+        "  FROM dwell_stream\n"
+        "),\n"
+        "visits AS (\n"
+        "  SELECT service_code, app_version, uuid, suid, visit_idx,\n"
+        "    max(is_dwell) AS has_dwell\n"
+        "  FROM dwell_marked WHERE visit_idx > 0\n"
+        "  GROUP BY 1, 2, 3, 4, 5\n"
+        "),\n"
+        "dwell_checks AS (\n"
+        "  SELECT service_code, app_version,\n"
+        "    count(*) AS total,\n"
+        "    count_if(has_dwell = 0) AS screen_without_dwell\n"
+        "  FROM visits GROUP BY 1, 2\n"
         ")\n"
         f"SELECT service_code, app_version, {_lit(date)} AS period,\n"
         "       'null_action_name' AS check_name,\n"
@@ -330,4 +424,8 @@ def build_quality_cube_sql(
         f"SELECT service_code, app_version, {_lit(date)} AS period,\n"
         "       'session_span_exceeds_timeout', session_span_exceeds_timeout,"
         " total FROM sess_checks\n"
+        "UNION ALL\n"
+        f"SELECT service_code, app_version, {_lit(date)} AS period,\n"
+        "       'screen_without_dwell', screen_without_dwell, total"
+        " FROM dwell_checks\n"
     )

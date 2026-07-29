@@ -21,6 +21,7 @@ def test_declares_the_checks_from_the_spec():
         "session_no_screen",
         "page_name_ambiguous",
         "session_span_exceeds_timeout",
+        "screen_without_dwell",
     )
 
 

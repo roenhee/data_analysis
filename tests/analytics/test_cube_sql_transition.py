@@ -42,8 +42,30 @@ def test_orders_events_within_a_session():
 
 def test_emits_from_to_cnt_and_duration():
     sql = build_transition_cube_sql(**ARGS)
-    for col in ("from_state", "to_state", "cnt", "dur_sum"):
+    for col in ("from_state", "to_state", "cnt", "dur_sum", "dur_n"):
         assert col in sql
+
+
+def test_reads_dwell_from_usage_rows_not_pageview_rows():
+    # Pageview 행의 usage.duration 은 비NULL 0건이다. 화면 신호만 읽으면 dur_sum 이 죽는다.
+    sql = build_transition_cube_sql(**ARGS)
+    assert "action_kind = 'UsagePage'" in sql
+    assert "CASE WHEN action_type = 'Usage'" in sql
+    # 원천은 밀리초다. 나누지 않으면 체류가 1000배로 나온다.
+    assert "usage_duration_ms / 1000.0" in sql
+
+
+def test_counts_measured_visits_so_coverage_is_visible():
+    # dur_sum / cnt 는 커버리지만큼 축소된 틀린 값이다. dur_n 이 있어야 나눌 수 있다.
+    sql = build_transition_cube_sql(**ARGS)
+    assert "count(e.dwell_sum) AS dur_n" in sql
+
+
+def test_start_edges_carry_no_dwell():
+    # START 에 첫 화면 체류를 붙이면 같은 체류가 두 엣지에 들어간다.
+    sql = build_transition_cube_sql(**ARGS)
+    start_row = sql[sql.index("'START' AS from_state"):]
+    assert "CAST(NULL AS double)" in start_row[:200]
 
 
 def test_keeps_only_sessions_starting_on_the_target_date():
