@@ -1203,3 +1203,55 @@ git commit -m "test: run every analysis against real cubes and update the skill"
   `.venv/bin/python -c '...'` 안에서 `import env` 후 `os.environ` 에 직접 넣는다.
 - **설계 노트를 믿지 말고 실행하라.** 이 프로젝트의 결함은 문자열 테스트를 100% 통과한
   상태로 존재한다. 새 가드마다 결함을 되주입하는 mutation check 로 확인한다.
+
+---
+
+## 인수인계 (2026-07-29, Task 3 이후를 맡는 사람에게)
+
+### 어디까지 됐나
+
+**Task 1·2 완료.** `analytics/analyses/base.py`(`CubeSet`·`AnalysisResult`·`publish`·레지스트리)와
+`operators.py`(`compare`)가 있고 테스트 24개가 붙어 있다. 전체 스위트 491 passed.
+
+**다음은 Task 3(`decompose`).** 계획서의 코드가 그대로 쓸 수 있다.
+
+### Task 1·2 를 하며 계획서와 달라진 것
+
+계획서 초안에 `get_analysis_for(comparison)` 헬퍼가 있었으나 만들지 않았다 —
+`Comparison.analysis_name` 을 Task 2 의 dataclass 에 넣어서 `get_analysis(c.analysis_name)` 로
+충분하다. Task 3 의 코드는 이미 그렇게 적혀 있다.
+
+`_primary_cube()` 를 하나 더 만들었다. `compare` 가 전이 큐브를 우선 쓰되 없으면 세션 큐브를
+쓰는데, 그 판단이 세 곳에 반복돼서 뺐다. 둘 다 없으면 `ValueError` 다.
+
+### mutation check 를 할 때 주의
+
+`tests/` 를 `sys.path` 에 넣으면 `tests/analytics/` 가 진짜 `analytics/` 패키지를 가려
+`ModuleNotFoundError` 가 난다. 테스트 모듈에서 픽스처를 임포트하지 말고 스크립트 안에
+다시 정의한다.
+
+그리고 **날짜 겹침 가드는 두 경로로 걸린다** — `compare` 가 직접 부르고, `weight_skew` 가
+내부에서 또 부른다. 한쪽만 무력화해서는 뮤테이션이 통과하지 않는다(의도한 건 아니지만
+남겨둘 만하다). 그 가드를 테스트할 때는 단위 테스트
+`test_a_disjoint_comparison_is_refused` 쪽을 믿는다.
+
+### 실데이터로 확인하고 싶을 때
+
+큐브는 15일치가 이미 있다. Trino 불필요:
+
+```python
+import glob, pandas as pd
+t = pd.concat([pd.read_parquet(p) for p in
+               glob.glob("cache/cubes/transition/*/date=*.parquet")])
+```
+
+버전 비교로 뭔가 확인하려면 **9.5.1 vs 9.5.0, `service_type == "MA"`** 를 쓴다. 심슨의
+역설이 재현되는 조합이라 회귀 그물로 쓸 수 있다 — 날짜별 +4~6%, 합산 음수여야 한다.
+
+### 이 층에서 특히 의심할 자리
+
+1. **가드를 분석으로 흘리지 말 것.** 날짜 겹침 검사가 분석 하나에라도 복사되면 갈라진다.
+2. **`headline` 없는 분석을 만들지 말 것.** 연산자가 그 분석에만 안 걸린다.
+3. **`decompose` 의 항등식** `within + between == pooled` — 가중치를 어느 쪽 층 비중으로
+   잡느냐에 따라 값이 달라지므로 테스트로 고정한다(계획서 Task 3 에 있다).
+4. **Louvain 시드**(Task 10) — 고정하지 않으면 실행마다 군집이 바뀌어 발행물이 재현되지 않는다.
