@@ -16,6 +16,7 @@ KW = dict(
     state_dict_version="sd_abc",
     axes=("period", "os"),
     cube_name="transition",
+    sql_hash="lh_abc",
 )
 
 
@@ -37,6 +38,11 @@ def test_cube_key_changes_with_axes():
 
 def test_cube_key_changes_with_cube_name():
     assert cube_key(**KW) != cube_key(**{**KW, "cube_name": "session"})
+
+
+def test_cube_key_changes_with_the_sql_logic():
+    # 이게 없으면 집계 SQL을 고쳐도 옛 큐브가 캐시 적중으로 나온다.
+    assert cube_key(**KW) != cube_key(**{**KW, "sql_hash": "lh_xyz"})
 
 
 def test_cube_path_partitions_by_date_under_the_key(config):

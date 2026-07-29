@@ -1,7 +1,13 @@
 """큐브 parquet의 캐시 키와 경로 규약.
 
-캐시 키에 source/state 사전/축/큐브명을 모두 넣으므로, 어느 하나가 달라지면 다른
-파일이 된다. 조용한 덮어쓰기가 구조적으로 불가능하다.
+캐시 키에 source/state 사전/축/큐브명/**집계 SQL의 로직 지문**을 모두 넣으므로, 어느
+하나가 달라지면 다른 파일이 된다. 조용한 덮어쓰기가 구조적으로 불가능하다.
+
+`sql_hash` 가 특히 중요하다. 이게 없으면 집계 SQL을 고쳐도 키가 그대로라 다시 빌드해도
+**옛 큐브가 캐시 적중으로 나온다** — 로직을 고쳤는데 결과가 안 바뀌고 그걸 눈치채지
+못한다. 2026-07-29 에 `dur_sum` 을 고치고 검증할 때 실제로 이걸 밟았다.
+`sql_hash` 는 날짜만 고정한 SQL로 계산하므로(`builder._logic_hash`) 날짜 간에는 같고,
+서비스 목록·state 사전·테이블 좌표·집계 로직이 바뀌면 달라진다.
 """
 from __future__ import annotations
 
@@ -22,8 +28,11 @@ def cube_key(
     state_dict_version: str,
     axes: tuple[str, ...],
     cube_name: str,
+    sql_hash: str,
 ) -> str:
-    return content_hash(source_version, state_dict_version, list(axes), cube_name)
+    return content_hash(
+        source_version, state_dict_version, list(axes), cube_name, sql_hash
+    )
 
 
 def cube_dir(
@@ -32,8 +41,9 @@ def cube_dir(
     state_dict_version: str,
     axes: tuple[str, ...],
     cube_name: str,
+    sql_hash: str,
 ) -> Path:
-    key = cube_key(source_version, state_dict_version, axes, cube_name)
+    key = cube_key(source_version, state_dict_version, axes, cube_name, sql_hash)
     return config.root / "cubes" / cube_name / key
 
 
@@ -44,6 +54,7 @@ def cube_path(
     state_dict_version: str,
     axes: tuple[str, ...],
     cube_name: str,
+    sql_hash: str,
 ) -> Path:
     """큐브 parquet 경로. `date` 는 반드시 `YYYY-MM-DD` 여야 한다.
 
@@ -53,7 +64,9 @@ def cube_path(
     """
     if not _DATE.match(date):
         raise ValueError(f"date must be YYYY-MM-DD, got {date!r}")
-    d = cube_dir(config, source_version, state_dict_version, axes, cube_name)
+    d = cube_dir(
+        config, source_version, state_dict_version, axes, cube_name, sql_hash
+    )
     return d / f"date={date}.parquet"
 
 

@@ -152,6 +152,56 @@ def test_cube_builders_use_the_tables_they_are_given(config):
     assert any("cat.sch.dem" in s for s in q.calls)
 
 
+def _pruned(tail: str = ""):
+    """가드를 통과하는 최소 SQL 을 내는 빌더. `tail` 로 로직만 바꿔치기한다."""
+    def _b(*, date, services, **_):
+        return (
+            f"SELECT 1 AS cnt{tail}\n"
+            "FROM t\n"
+            f"WHERE date_id = '{date}' AND c_service_code = '{services[0]}'\n"
+        )
+    return _b
+
+
+def test_changing_the_aggregation_sql_misses_the_cache(config):
+    """집계 SQL이 바뀌면 반드시 다시 빌드해야 한다.
+
+    SQL 로직이 캐시 키에 없던 동안에는 `dur_sum` 을 고치고 다시 빌드해도 옛 큐브가
+    그대로 나왔다. 로직을 고쳤는데 결과가 안 바뀌고 그걸 눈치채지 못하는 상태였다.
+    """
+    kw = dict(config=config, state_dict=_sd(), window=("2026-07-27", "2026-07-27"),
+              services=["top"], source_version="sv1")
+    first = build_cubes(**kw, query_fn=FakeQuery(), cube_builders={"c": _pruned()})
+    assert len(first) == 1
+
+    again = build_cubes(**kw, query_fn=FakeQuery(), cube_builders={"c": _pruned()})
+    assert again == [], "같은 SQL 은 캐시 적중이어야 한다"
+
+    changed = build_cubes(
+        **kw, query_fn=FakeQuery(), cube_builders={"c": _pruned(", 2 AS extra")}
+    )
+    assert len(changed) == 1, "SQL 이 바뀌었는데 캐시 적중했다"
+    assert changed[0] != first[0], "새 로직이 옛 큐브를 덮어썼다"
+
+
+def test_the_logic_fingerprint_is_the_same_across_dates(config):
+    """지문이 날짜에 흔들리면 날짜마다 다른 디렉터리가 생겨 범위 읽기가 깨진다."""
+    kw = dict(config=config, state_dict=_sd(), services=["top"], source_version="sv1")
+    written = build_cubes(**kw, window=("2026-07-27", "2026-07-29"),
+                          query_fn=FakeQuery(), cube_builders={"c": _pruned()})
+    assert len({p.parent for p in written}) == 1
+    assert len(written) == 3
+
+
+def test_different_services_do_not_share_a_cube_path(config):
+    """서비스 목록은 키의 다른 어떤 항목에도 없다 — 지문이 겹침을 막는 유일한 장치다."""
+    kw = dict(config=config, state_dict=_sd(), window=("2026-07-27", "2026-07-27"),
+              source_version="sv1", cube_builders={"c": _pruned()})
+    top = build_cubes(**kw, services=["top"], query_fn=FakeQuery())
+    media = build_cubes(**kw, services=["media"], query_fn=FakeQuery())
+    assert top[0] != media[0]
+
+
 def test_a_failing_date_leaves_earlier_dates_committed(config):
     """날짜 하나가 실패해도 앞서 성공한 날짜의 parquet 은 남는다.
 

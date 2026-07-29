@@ -36,7 +36,7 @@ from analytics.cube.state_sql import (
 )
 from analytics.cube.store import has_cube, write_cube
 from data_layer.config import Config
-from data_layer.util import day_strings
+from data_layer.util import content_hash, day_strings
 
 SOURCES_PATH = Path("examples/config/sources.json")
 
@@ -66,6 +66,34 @@ def _default_query(sql: str) -> pd.DataFrame:
 def _run(query_fn, sql: str) -> pd.DataFrame:
     assert_safe_sql(sql)
     return query_fn(sql)
+
+
+# 로직 지문을 뽑을 때만 쓰는 고정 날짜. 실제 빌드에는 쓰이지 않는다.
+# 날짜를 고정해야 같은 로직이 날짜마다 다른 캐시 키를 내지 않는다.
+_KEY_PROBE_DATE = "2000-01-01"
+
+
+def _logic_hash(cube_builder, *, state_dict, services, events_table,
+                demography_table) -> str:
+    """큐브 SQL의 로직 지문. 캐시 키에 들어간다.
+
+    이게 키에 없으면 집계 SQL을 고쳐도 키가 그대로라 다시 빌드해도 **옛 큐브가 캐시
+    적중으로 나온다.** 로직을 고쳤는데 결과가 안 바뀌고 그걸 눈치채지 못하는 상태다.
+    수동으로 올리는 버전 상수를 쓰지 않는 이유는 올리는 걸 잊기 때문이다.
+
+    날짜만 고정하고 나머지는 실제 인자로 SQL을 만들어 해싱한다. 따라서 지문은 날짜
+    간에는 같고, 집계 로직·서비스 목록·state 사전·테이블 좌표가 바뀌면 달라진다.
+    (서비스 목록은 키의 다른 어떤 항목에도 들어있지 않아서, 이 지문이 서비스별 큐브가
+    같은 경로에 겹쳐 쓰이는 것도 함께 막는다.)
+    """
+    probe = cube_builder(
+        state_dict=state_dict,
+        date=_KEY_PROBE_DATE,
+        services=services,
+        events_table=events_table,
+        demography_table=demography_table,
+    )
+    return content_hash(probe)
 
 
 def build_state_dict(
@@ -170,6 +198,14 @@ def build_cubes(
     """
     q = query_fn or _default_query
     builders = cube_builders or DEFAULT_CUBE_BUILDERS
+    # 날짜와 무관하므로 날짜 루프 밖에서 한 번만 계산한다.
+    logic = {
+        name: _logic_hash(
+            b, state_dict=state_dict, services=services,
+            events_table=events_table, demography_table=demography_table,
+        )
+        for name, b in builders.items()
+    }
     written: list[Path] = []
     for day in day_strings(*window):
         for name, builder in builders.items():
@@ -178,6 +214,7 @@ def build_cubes(
                 state_dict_version=state_dict.version(),
                 axes=CORE_AXIS_NAMES,
                 cube_name=name,
+                sql_hash=logic[name],
             )
             if not refresh and has_cube(config, date=day, **key_parts):
                 continue
