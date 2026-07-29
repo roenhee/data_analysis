@@ -230,15 +230,16 @@ def test_the_search_dwell_gap_surfaces_as_the_loudest_warning(real_cubes, real_r
 
 
 @needs_cubes
-def test_the_pooled_rate_would_hide_the_service_that_is_bad(real_results):
-    """서비스를 합치면 `session_no_screen` 이 22.0% 로 임계치 0.30 에 안 걸린다.
+def test_the_pooled_rate_would_hide_the_service_that_is_bad(real_cubes, real_results):
+    """서비스를 합치면 `session_no_screen` 이 어떤 임계치에도 안 걸린다.
 
-    top 의 나쁜 날은 32~38% 다(하루 2,000만 세션대). 그래서 서비스는 접지 않는다.
+    실측 (서비스,날짜) 수준은 이분돼 있다 — top 0.1960~0.3262, 나머지 5서비스
+    0.0087~0.0780. 합치면 0.22 다. 그래서 서비스는 접지 않는다.
     """
     got = real_results["quality_report"]
-    assert got.headline["worst_session_no_screen"] < 0.30
     fired = [w for w in got.envelope["warnings"]
              if w["check_name"] == "session_no_screen"]
-    assert fired, "top 의 나쁜 날이 경고에 없다"
     assert {w["service_code"] for w in fired} == {"top"}
-    assert all(w["ratio"] > 0.30 and w["total"] > 1_000_000 for w in fired)
+    # 상시 표시다 — 정상 변동의 상위 몇 일만이 아니라 매일 걸려야 한다.
+    assert len(fired) == len(real_cubes.present_dates)
+    assert all(w["ratio"] > 0.15 and w["total"] > 1_000_000 for w in fired)

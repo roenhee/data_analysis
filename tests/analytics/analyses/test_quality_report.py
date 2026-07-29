@@ -130,12 +130,14 @@ def test_thresholds_default_to_the_shipped_config():
 
 
 def test_an_unthresholded_check_is_reported_but_not_warned_about():
-    """임계치를 발명하지 않는다 — 측정된 기저가 없는 검사는 표에만 낸다."""
-    rows = CHECKS + [("2026-07-27", "top", "page_name_ambiguous", 900, 1000)]
+    """`screen_other_ratio` 는 일부러 임계치가 없다 — 사전 이탈을 볼 수 없는 하한이라
+    임계치를 걸면 감시되고 있다는 잘못된 안심을 준다. 표에는 그대로 낸다.
+    """
+    rows = CHECKS + [("2026-07-27", "top", "screen_other_ratio", 900, 1000)]
     got = get_analysis("quality_report")(_cubes(rows))
-    assert "page_name_ambiguous" in set(got.frame["check_name"])
+    assert "screen_other_ratio" in set(got.frame["check_name"])
     assert not [w for w in got.envelope["warnings"]
-                if w["check_name"] == "page_name_ambiguous"]
+                if w["check_name"] == "screen_other_ratio"]
 
 
 def test_the_envelope_carries_screen_coverage():
