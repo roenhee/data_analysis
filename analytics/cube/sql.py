@@ -61,11 +61,26 @@ def _event_cte(
     )
 
 
-def _first_event_axes(indent: str = "    ") -> str:
-    """세션의 축 값을 첫 이벤트로 고정하는 SELECT 절. 세션이 축에서 쪼개지지 않게 한다."""
-    return (",\n" + indent).join(
-        f"min_by({a}, ts) AS {a}" for a in CORE_AXIS_NAMES
-    )
+def _first_event_axes(date: str, indent: str = "    ") -> str:
+    """세션의 축 값을 첫 이벤트로 고정하는 SELECT 절. 세션이 축에서 쪼개지지 않게 한다.
+
+    **`period` 만 예외로 빌드 날짜 상수다.** 나머지 축처럼 `min_by(period, ts)` 로 두면
+    `period` 가 첫 이벤트의 `date_id`(그 이벤트가 **쓰인 파티션**)가 되는데, 귀속은
+    `date(min(ts))`(첫 이벤트의 **access_time 날짜**)로 한다. 둘은 항상 같지 않다 —
+    실측 45.7만 세션 중 42만(0.0919%)이 어긋났고, 자정 직전 이벤트가 다음 날 파티션에
+    쓰이는 탓에 D+1 쪽으로 크게 치우쳤다(파일당 D-1 은 50~100건, D+1 은 1.8만~4.9만건).
+
+    그 결과 14일치를 이어붙여 `period` 로 묶으면 **한 period 에 롤업 행이 두 개** 나온다
+    (D 파일과 D+1 파일이 둘 다 그 period 행을 갖는다). 눈치 못 채고 합산하면 조용히 2배가
+    된다. 귀속이 `date(min(ts)) = date` 를 보장하므로 `period` 는 상수여야 맞다.
+    """
+    parts = []
+    for axis in CORE_AXIS_NAMES:
+        if axis == "period":
+            parts.append(f"{_lit(date)} AS period")
+        else:
+            parts.append(f"min_by({axis}, ts) AS {axis}")
+    return (",\n" + indent).join(parts)
 
 
 def _first_event_attribution(date: str) -> str:
@@ -118,7 +133,7 @@ def build_session_cube_sql(
         "  SELECT\n"
         "    uuid,\n"
         "    suid,\n"
-        f"    {_first_event_axes()},\n"
+        f"    {_first_event_axes(date)},\n"
         "    count(*) AS events,\n"
         "    count_if(action_type = 'Pageview') AS pv,\n"
         "    date_diff('second', min(ts), max(ts)) AS duration_sec\n"
@@ -190,7 +205,7 @@ def build_transition_cube_sql(
         "  SELECT\n"
         "    uuid,\n"
         "    suid,\n"
-        f"    {_first_event_axes()}\n"
+        f"    {_first_event_axes(date)}\n"
         + _first_event_attribution(date)
         + "),\n"
         # 화면 신호(Pageview)와 체류 신호(Usage/UsagePage)를 한 스트림으로 합친다.

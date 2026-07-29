@@ -70,3 +70,22 @@ def test_joins_demography_with_a_left_join():
 def test_counts_distinct_uuid_for_uv():
     sql = build_session_cube_sql(**ARGS)
     assert "count(DISTINCT" in sql
+
+
+def test_period_is_the_build_date_not_the_partition_of_the_first_event():
+    """`period` 는 귀속일과 반드시 같아야 한다.
+
+    `min_by(period, ts)` 로 두면 첫 이벤트가 **쓰인 파티션**(`date_id`)이 되는데, 귀속은
+    첫 이벤트의 `access_time` 날짜로 한다. 실측 0.0919% 가 어긋났고 D+1 쪽으로 치우쳤다.
+    그러면 14일치를 이어붙여 `period` 로 묶을 때 한 period 에 롤업 행이 둘 나와서,
+    합산하면 조용히 2배가 된다.
+    """
+    sql = build_session_cube_sql(**ARGS)
+    assert "'2026-07-27' AS period" in sql
+    assert "min_by(period" not in sql
+
+
+def test_the_other_axes_still_come_from_the_first_event():
+    sql = build_session_cube_sql(**ARGS)
+    for axis in ("service_type", "os", "gender", "age_band", "daypart", "app_version"):
+        assert f"min_by({axis}, ts)" in sql

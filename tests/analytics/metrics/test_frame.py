@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from analytics.metrics.frame import (
+    AmbiguousRollupError,
     NonAdditiveMeasureError,
     additive_sum,
     full_combination_rows,
@@ -146,3 +147,31 @@ def test_metrics_modules_do_not_import_the_filesystem():
                 continue
             assert not (mods & banned), f"{name}.py imports {mods & banned}"
     assert checked >= 1, "순수성 검사가 아무 파일도 못 봤다 — 경로가 틀렸다"
+
+
+def _multi_day_cube() -> pd.DataFrame:
+    """두 날짜의 큐브 파일을 이어붙인 프레임. 롤업 행이 날짜마다 하나씩 있다."""
+    day1 = _cube()
+    day2 = _cube().assign(period=lambda d: d["period"].where(d["period"].isna(), "2026-07-28"))
+    return pd.concat([day1, day2], ignore_index=True)
+
+
+def test_rollup_rows_rejects_a_frame_holding_more_than_one_days_rollups():
+    """날짜별 파일을 이어붙인 뒤 롤업을 읽으면 같은 롤업이 여러 개 나온다.
+
+    눈치 못 채고 합산하면 조용히 N배가 된다. 실제로 14일치를 이어붙였다가 한 period 에
+    롤업 행이 둘 나오는 걸 밟았다. 날짜별로 읽든지, 명시적으로 합치든지 골라야 한다.
+    """
+    with pytest.raises(AmbiguousRollupError, match="2"):
+        rollup_rows(_multi_day_cube(), AXES, folded=("period", "os", "gender"))
+
+
+def test_rollup_rows_is_fine_when_exactly_one_matches():
+    got = rollup_rows(_cube(), AXES, folded=("period", "os", "gender"))
+    assert len(got) == 1
+
+
+def test_full_combination_rows_is_unaffected_by_multi_day_frames():
+    # 전체 조합 행은 날짜마다 달라서 겹치지 않는다. 합산해도 안전하다.
+    got = full_combination_rows(_multi_day_cube(), AXES)
+    assert len(got) == 4

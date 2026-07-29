@@ -17,6 +17,10 @@ class NonAdditiveMeasureError(ValueError):
     """가산이 아닌 측정값을 합산하려 했다."""
 
 
+class AmbiguousRollupError(ValueError):
+    """같은 롤업 좌표에 행이 여럿이다 — 여러 날짜 파일이 섞여 있다."""
+
+
 def full_combination_rows(df: pd.DataFrame, axes: tuple[str, ...]) -> pd.DataFrame:
     """축이 하나도 접히지 않은 행만 남긴다."""
     present = [a for a in axes if a in df.columns]
@@ -44,6 +48,19 @@ def rollup_rows(
             out = out[out[axis].isna()]
         else:
             out = out[out[axis].notna()]
+
+    # 날짜별 파일을 이어붙인 프레임은 **파일마다** 롤업 행을 갖는다. 그걸 모르고 합산하면
+    # 조용히 N배가 된다 — 실제로 14일치를 이어붙였다가 한 좌표에 롤업 행이 둘 나오는 걸
+    # 밟았다. 접히지 않은 축이 유일 키를 이뤄야 한다.
+    kept = [a for a in axes if a not in folded and a in out.columns]
+    duplicated = int(out.duplicated(subset=kept).sum()) if kept else max(len(out) - 1, 0)
+    if duplicated:
+        raise AmbiguousRollupError(
+            f"{len(out)} rows share a rollup coordinate ({duplicated} duplicated) — "
+            "the frame holds rollup rows from more than one cube file; read one date "
+            "at a time, or aggregate the full-combination rows explicitly (uv cannot "
+            "be summed that way)"
+        )
     return out
 
 
