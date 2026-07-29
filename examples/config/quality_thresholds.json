@@ -1,0 +1,18 @@
+{
+  "_rule": "임계치는 '측정된 기저보다 뚜렷하게 나빠졌다' 를 뜻한다. 기저는 아래 basis 에 적힌 실측이고, 임계치는 관측된 최댓값 위로 여유를 둔 값이다. 이 값을 넘으면 막지 않고 경고한다 — 해석에 주의가 필요하다는 뜻이지 계산이 틀렸다는 뜻이 아니다.",
+  "_absent_checks": "여기 없는 검사(null_action_name, pageview_null_kind, screen_other_ratio, page_name_ambiguous, session_span_exceeds_timeout)는 일부러 비워 두었다. 측정된 기저가 없는 상태로 숫자를 적으면 근거 없는 값이 권위를 갖는다. 기저를 재고 basis 와 함께 추가한다.",
+  "thresholds": {
+    "session_no_screen": {
+      "limit": 0.30,
+      "basis": "실측 2026-07 전체 22.0% (화면 커버리지 78.0%). 서비스 편차가 커서 top 25.5%, 나머지 1.2~7.1% — 관측 최댓값 25.5% 위로 여유를 둔다."
+    },
+    "exit_without_appexit": {
+      "limit": 0.15,
+      "basis": "실측 앱 세션의 88.6% 가 마지막 화면 뒤 AppExit 를 가진다 = 위반 11.4%. 이 검사는 이탈 정의의 삼각측량이라 위반이 늘면 이탈확률 해석 자체가 약해진다."
+    },
+    "screen_without_dwell": {
+      "limit": 0.50,
+      "basis": "전이 큐브 체류 커버리지 실측 57~69% = 위반 31~43%. 관측 최댓값 43% 위로 여유를 둔다. 절반을 넘으면 조건부 평균이 소수를 대표한다."
+    }
+  }
+}

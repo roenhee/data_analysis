@@ -63,6 +63,25 @@ def load_holidays(path: Path = HOLIDAYS_PATH) -> tuple[set[str], list[tuple[str,
     return set(raw.get("holidays", {})), windows
 
 
+QUALITY_THRESHOLDS_PATH = Path("examples/config/quality_thresholds.json")
+
+
+def load_quality_thresholds(
+    path: Path = QUALITY_THRESHOLDS_PATH,
+) -> dict[str, float]:
+    """`{검사 이름: 비율 임계치}`. `quality_report` 가 경고를 낼 때 쓴다.
+
+    **모든 검사에 임계치가 있는 것이 아니다.** 측정된 기저가 없는 검사는 파일에서
+    일부러 비어 있고, `quality_warnings` 는 임계치 없는 검사를 건너뛴다 — 근거 없는
+    숫자를 넣으면 그 값이 권위를 갖는다. 각 임계치의 근거는 파일의 `basis` 에 있다.
+    """
+    raw = json.loads(Path(path).read_text())
+    return {
+        name: float(meta["limit"])
+        for name, meta in raw.get("thresholds", {}).items()
+    }
+
+
 RELEASES_PATH = Path("examples/config/releases.json")
 
 
