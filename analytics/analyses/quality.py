@@ -18,6 +18,42 @@ from analytics.metrics.load import load_quality_thresholds
 EXIT_CHECK = "exit_without_appexit"
 
 
+def _fold_warnings(raw: list[dict]) -> list[dict]:
+    """행 단위 경고를 (검사, 서비스) 단위로 접는다.
+
+    **실데이터에서만 드러난 문제다.** 경고는 서비스·버전·날짜마다 하나씩 나오고 앱
+    버전이 982개라, 15일치에서 18,973건 · 봉투 JSON 2.3 MB 가 됐다. 발행물마다 그게
+    붙고 사람은 읽지 못한다. 접으면 18건이다.
+
+    접는 축은 버전·날짜다. **서비스는 접지 않는다** — 한 서비스만 나쁜 경우가 평균에
+    묻히는 것이 이 검사들의 존재 이유다(실측 `top` 25.5% 대 나머지 1.2~7.1%).
+    몇 행이 임계치를 넘었는지 함께 내므로 조용히 잘라내는 것이 아니다.
+    """
+    folded: dict[tuple[str, str], dict] = {}
+    for one in raw:
+        key = (one["check_name"], one["service_code"])
+        seen = folded.get(key)
+        if seen is None:
+            folded[key] = {
+                "check_name": one["check_name"],
+                "service_code": one["service_code"],
+                "worst_ratio": one["ratio"],
+                "worst_app_version": one["app_version"],
+                # 최악 지점의 분모. 롱테일 버전이 세션 3건으로 100% 를 찍는 것과
+                # 주력 버전이 300만 중 100% 인 것은 완전히 다른 사건이다.
+                "worst_total": one["total"],
+                "threshold": one["threshold"],
+                "rows_over_threshold": 1,
+            }
+            continue
+        seen["rows_over_threshold"] += 1
+        if one["ratio"] > seen["worst_ratio"]:
+            seen["worst_ratio"] = one["ratio"]
+            seen["worst_app_version"] = one["app_version"]
+            seen["worst_total"] = one["total"]
+    return sorted(folded.values(), key=lambda w: -w["worst_ratio"])
+
+
 @analysis("quality_report")
 def quality_report(cubes: CubeSet, thresholds: dict[str, float] | None = None,
                    **_) -> AnalysisResult:
@@ -30,8 +66,9 @@ def quality_report(cubes: CubeSet, thresholds: dict[str, float] | None = None,
     `thresholds` 를 주지 않으면 shipped config 를 쓴다. 임계치가 없는 검사는 표에는
     나오지만 경고하지 않는다 — 측정된 기저 없이 임계치를 발명하지 않는다.
 
-    경고는 **원본 행 단위**(서비스·버전·날짜)로 낸다. 합쳐 놓으면 한 서비스만 나쁜
-    경우가 평균에 묻힌다 — 실측에서 `top` 은 25.5% 인데 나머지는 1.2~7.1% 였다.
+    경고는 **(검사, 서비스) 단위**다. 서비스를 합치면 한 서비스만 나쁜 경우가 평균에
+    묻히고(실측 `top` 25.5% 대 나머지 1.2~7.1%), 버전·날짜까지 남기면 봉투가 2.3 MB
+    가 된다(실측 앱 버전 982개). `_fold_warnings` 참고.
     """
     quality = cubes.quality
     if quality is None:
@@ -71,6 +108,8 @@ def quality_report(cubes: CubeSet, thresholds: dict[str, float] | None = None,
 
     return AnalysisResult(
         frame=frame, headline=headline, compare_key="check_name",
-        envelope=envelope_for(cubes, coverage, quality_warnings(quality, limits)),
+        envelope=envelope_for(
+            cubes, coverage, _fold_warnings(quality_warnings(quality, limits))
+        ),
         viz={"kind": "line", "x": "period"},
     )

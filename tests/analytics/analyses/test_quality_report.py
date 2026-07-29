@@ -71,9 +71,33 @@ def test_warnings_fire_above_the_configured_threshold():
     )
     fired = [w for w in got.envelope["warnings"]
              if w["check_name"] == "session_no_screen"]
-    # top 은 두 날 모두 넘고(0.255, 0.30) news 는 두 날 모두 안 넘는다(0.012, 0.02).
-    assert len(fired) == 2
-    assert all(w["service_code"] == "top" for w in fired)
+    # top 은 두 날 모두 넘고(0.255, 0.30) news 는 두 날 모두 안 넘는다(0.003, 0.005).
+    assert len(fired) == 1
+    assert fired[0]["service_code"] == "top"
+    assert fired[0]["rows_over_threshold"] == 2
+    assert fired[0]["worst_ratio"] == pytest.approx(0.30)
+
+
+def test_warnings_collapse_across_versions_and_dates():
+    """실측에서 앱 버전이 982개라 행 단위로 경고하면 18,973건 · 봉투 2.3 MB 가 된다.
+
+    한 서비스가 나쁜지는 알아야 하지만, 같은 (검사, 서비스) 를 버전·날짜마다 되풀이할
+    필요는 없다. 접고 나면 실측이 18건이다. 몇 행이 넘었는지는 함께 낸다 —
+    조용히 자르지 않는다.
+    """
+    many = [("2026-07-27", "top", "session_no_screen", 500, 1000)]
+    many += [(f"2026-07-{27 + d}", "top", "session_no_screen", 400 + v, 1000)
+             for d in (0, 1) for v in range(20)]
+    got = get_analysis("quality_report")(
+        _cubes(many), thresholds={"session_no_screen": 0.10}
+    )
+    assert len(got.envelope["warnings"]) == 1
+    only = got.envelope["warnings"][0]
+    assert only["rows_over_threshold"] == 41
+    assert only["worst_ratio"] == pytest.approx(0.500)
+    assert only["worst_app_version"] == "9.5.1"
+    # 최악 지점의 분모까지 실어야 세션 3건짜리 100% 와 구분된다.
+    assert only["worst_total"] == pytest.approx(1000.0)
 
 
 def test_thresholds_default_to_the_shipped_config():

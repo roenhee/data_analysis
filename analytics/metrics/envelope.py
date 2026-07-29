@@ -82,6 +82,9 @@ def quality_warnings(quality_cube, thresholds: dict[str, float]) -> list[dict]:
                     "service_code": row.service_code,
                     "app_version": row.app_version,
                     "ratio": float(ratio),
+                    # 분모 없이 낸 비율은 3건 중 3건과 300만 중 300만을 같게 보이게 한다.
+                    # 실측 롱테일 버전들이 100% 를 찍는데 세션이 한 자리 수다.
+                    "total": float(row.total),
                     "threshold": float(limit),
                 }
             )

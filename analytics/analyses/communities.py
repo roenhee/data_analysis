@@ -28,8 +28,21 @@ def _screen_graph(edges: pd.DataFrame) -> nx.Graph:
     used = edges[(edges["cnt"] > 0)
                  & ~edges["from_state"].isin((START, EXIT))
                  & ~edges["to_state"].isin((START, EXIT))]
+    # **먼저 쌍으로 묶고 정렬한다.** 두 가지를 동시에 고친다.
+    #
+    # 속도: 세그먼트 축이 붙은 큐브는 같은 쌍이 수만 행으로 흩어져 있다(실측 15일치
+    # 화면 엣지 2,538,274 행 대 화면 쌍 221개). 행마다 그래프를 건드리면 15개 노드짜리
+    # 군집에 8.8초가 걸렸다. 묶으면 0.48초다.
+    #
+    # 재현성: 노드 삽입 순서가 Louvain 의 답을 바꾼다. **시드를 고정해도 그렇다.**
+    # 실측에서 행 단위로 조립한 그래프와 묶어서 조립한 그래프는 노드·엣지·가중치가
+    # 완전히 같은데(가중치 다른 엣지 0개) 군집이 4개(Q=0.395878) 대 3개(Q=0.394087)로
+    # 갈렸다. 정렬해서 넣으면 큐브 행 순서와 무관하게 같은 그래프가 나온다.
+    pairs = used.groupby(["from_state", "to_state"], as_index=False)["cnt"].sum(
+    ).sort_values(["from_state", "to_state"], ignore_index=True)
+
     graph = nx.Graph()
-    for row in used.itertuples():
+    for row in pairs.itertuples():
         weight = float(row.cnt)
         if graph.has_edge(row.from_state, row.to_state):
             graph[row.from_state][row.to_state]["weight"] += weight
@@ -46,12 +59,15 @@ def screen_communities(cubes: CubeSet, seed: int = DEFAULT_SEED,
     **시드를 고정한다.** Louvain 은 무작위 초기화가 있어 고정하지 않으면 실행마다 군집이
     바뀌고, 그러면 같은 질문에 두 답이 발행된다.
 
-    시드만으로는 부족해서 군집 **번호**도 못 박는다. Louvain 이 돌려주는 집합의 순서는
-    그래프 노드 순서를 따르고, 그 노드 순서는 **엣지 행 순서**를 따른다 — 같은 군집인데
-    큐브 행 순서만 바뀌어도 번호가 뒤집힌다(확인: 두 클러스터의 행 순서를 맞바꾸면
-    원시 순서가 `[[A,B,C],[X,Y,Z]]` 에서 `[[X,Y,Z],[A,B,C]]` 로 뒤집혔다). 읽는 날짜
-    범위나 parquet 파일 순서만 달라져도 생기는 일이라, 무게 내림차순·같으면 첫 화면
-    이름순으로 0번부터 다시 매긴다. 그래서 0번은 항상 가장 큰 군집이다.
+    시드만으로는 부족하다. 노드 삽입 순서가 Louvain 의 답을 바꾸므로 그래프 조립을
+    `_screen_graph` 에서 정렬로 못 박고, 군집 **번호**도 무게 내림차순(같으면 첫 화면
+    이름순)으로 다시 매긴다. 그래서 0번은 항상 가장 큰 군집이다.
+
+    **군집 수를 강한 사실로 읽지 말 것.** 실측 15일치는 화면이 15개뿐이고 modularity
+    0.394 인데, 노드 순서만 다른 같은 그래프에서 4개(Q=0.395878) 와 3개(Q=0.394087) 가
+    나왔다. 두 분할의 품질 차이가 0.002 라 사실상 무승부다 — 어느 화면들이 함께 묶이는
+    경향인지는 읽을 수 있어도 "군집이 정확히 N개" 는 이 데이터가 답할 수 있는 질문이
+    아니다.
     """
     edges = cubes.transition
     if edges is None:

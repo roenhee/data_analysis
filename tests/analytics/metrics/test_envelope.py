@@ -22,6 +22,15 @@ def test_warnings_fire_above_the_threshold():
     assert got[0]["ratio"] == pytest.approx(0.198)
 
 
+def test_a_warning_carries_its_denominator():
+    """비율만 내면 3건 중 3건과 300만 중 300만이 같게 보인다.
+
+    실측에서 롱테일 앱 버전들이 `session_no_screen` 100% 를 찍는데 세션은 한 자리 수다.
+    """
+    got = quality_warnings(_quality(), thresholds={"null_action_name": 0.1})
+    assert got[0]["total"] == pytest.approx(1000.0)
+
+
 def test_warnings_stay_silent_below_the_threshold():
     assert quality_warnings(_quality(), thresholds={"session_no_screen": 0.5}) == []
 
