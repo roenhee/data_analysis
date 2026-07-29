@@ -87,6 +87,28 @@ class AnalysisResult:
     viz: dict = field(default_factory=dict)
 
 
+def envelope_for(
+    cubes: CubeSet, coverage: dict, warnings: list[dict] | None = None
+) -> dict:
+    """`CubeSet` 의 날짜 장부로 봉투를 만든다.
+
+    분석마다 손으로 짜면 한 곳은 반드시 키를 빠뜨리고, 그 결과는 `publish` 에서야
+    막힌다. 커버리지와 경고만 분석이 채운다 — 나머지는 큐브가 이미 알고 있다.
+    """
+    present = set(cubes.present_dates)
+    missing = [d for d in cubes.requested_dates if d not in present]
+    return {
+        "state_dict_version": cubes.state_dict_version,
+        "services": list(cubes.services),
+        "requested_dates": list(cubes.requested_dates),
+        "present_dates": list(cubes.present_dates),
+        "missing_dates": missing,
+        "is_complete": not missing,
+        "coverage": dict(coverage),
+        "warnings": list(warnings or []),
+    }
+
+
 _REGISTRY: dict[str, Callable] = {}
 
 

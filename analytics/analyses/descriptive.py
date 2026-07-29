@@ -3,25 +3,11 @@ from __future__ import annotations
 
 import pandas as pd
 
-from analytics.analyses.base import AnalysisResult, CubeSet, analysis
+from analytics.analyses.base import AnalysisResult, CubeSet, analysis, envelope_for
 from analytics.metrics.calendar import day_kind
 from analytics.metrics.coverage import demography_coverage
 from analytics.metrics.descriptive import SESSION_AXES, engagement, uv_pv
 from analytics.metrics.frame import rollup_rows
-
-
-def _envelope(cubes: CubeSet, coverage: dict) -> dict:
-    return {
-        "state_dict_version": cubes.state_dict_version,
-        "services": list(cubes.services),
-        "requested_dates": list(cubes.requested_dates),
-        "present_dates": list(cubes.present_dates),
-        "missing_dates": [d for d in cubes.requested_dates
-                          if d not in set(cubes.present_dates)],
-        "is_complete": set(cubes.requested_dates) <= set(cubes.present_dates),
-        "coverage": coverage,
-        "warnings": [],
-    }
 
 
 @analysis("session_trend")
@@ -73,6 +59,6 @@ def session_trend(cubes: CubeSet, holidays: set[str] | None = None,
     }
     return AnalysisResult(
         frame=frame, headline=headline, compare_key="period",
-        envelope=_envelope(cubes, demography_coverage(cubes.session)),
+        envelope=envelope_for(cubes, demography_coverage(cubes.session)),
         viz={"kind": "line", "x": "period"},
     )
