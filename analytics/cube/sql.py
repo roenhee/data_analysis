@@ -272,6 +272,7 @@ QUALITY_CHECKS = (
     "page_name_ambiguous",
     "session_span_exceeds_timeout",
     "screen_without_dwell",
+    "exit_without_appexit",
 )
 
 
@@ -404,6 +405,27 @@ def build_quality_cube_sql(
         "    count(*) AS total,\n"
         "    count_if(has_dwell = 0) AS screen_without_dwell\n"
         "  FROM visits GROUP BY 1, 2\n"
+        "),\n"
+        # 이탈 정의의 삼각측량. 앱 세션만 분모에 넣는다 — 웹에는 종료 이벤트가 없어서
+        # 섞으면 검사가 "웹 비중"을 재게 된다.
+        "exit_sess AS (\n"
+        "  SELECT uuid, suid,\n"
+        "    min_by(service_code, ts) AS service_code,\n"
+        "    min_by(app_version, ts) AS app_version,\n"
+        "    max(CASE WHEN action_type = 'Pageview' THEN ts END) AS last_pv,\n"
+        "    max(CASE WHEN action_type = 'App' AND action_kind = 'AppExit'\n"
+        "             THEN ts END) AS last_exit,\n"
+        "    count_if(action_type = 'App') AS app_events\n"
+        + _first_event_attribution(date)
+        + "),\n"
+        "exit_checks AS (\n"
+        "  SELECT service_code, app_version,\n"
+        "    count(*) AS total,\n"
+        "    count_if(last_exit IS NULL OR last_exit < last_pv)"
+        " AS exit_without_appexit\n"
+        "  FROM exit_sess\n"
+        "  WHERE last_pv IS NOT NULL AND app_events > 0\n"
+        "  GROUP BY 1, 2\n"
         ")\n"
         f"SELECT service_code, app_version, {_lit(date)} AS period,\n"
         "       'null_action_name' AS check_name,\n"
@@ -428,4 +450,8 @@ def build_quality_cube_sql(
         f"SELECT service_code, app_version, {_lit(date)} AS period,\n"
         "       'screen_without_dwell', screen_without_dwell, total"
         " FROM dwell_checks\n"
+        "UNION ALL\n"
+        f"SELECT service_code, app_version, {_lit(date)} AS period,\n"
+        "       'exit_without_appexit', exit_without_appexit, total"
+        " FROM exit_checks\n"
     )

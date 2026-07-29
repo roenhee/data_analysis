@@ -184,6 +184,72 @@ def test_dwell_coverage_ignores_usage_rows_that_are_not_usagepage():
     assert (violated, total) == (1, 1)
 
 
+def test_exit_without_appexit_flags_a_session_whose_log_just_stopped():
+    """이탈 정의의 삼각측량. 마지막 화면 뒤에 AppExit 가 없으면 위반이다.
+
+    실측(2026-07-27 `top`): 앱 세션의 88.6% 가 마지막 화면 뒤에 AppExit 를 갖는다.
+    이 비율이 흔들리면 로깅이 바뀐 것이므로 이탈률 해석을 다시 봐야 한다.
+    """
+    ev = _ev(
+        [
+            # 세션 1(u1): 화면 뒤에 AppExit 있음 -> 정상
+            ("2026-07-27 10:00", "App", "AppLaunch", None, None, "u1", "s1"),
+            ("2026-07-27 10:01", "Pageview", "ViewPage", "홈탭_진입", "home", "u1", "s1"),
+            ("2026-07-27 10:05", "App", "AppExit", None, None, "u1", "s1"),
+            # 세션 2(u2): 화면 뒤에 AppExit 없음 -> 위반
+            ("2026-07-27 10:00", "App", "AppLaunch", None, None, "u2", "s2"),
+            ("2026-07-27 10:01", "Pageview", "ViewPage", "홈탭_진입", "home", "u2", "s2"),
+        ]
+    )
+    violated, total = _check(_run(ev, "2026-07-27", WINDOW_27), "exit_without_appexit")
+    assert (violated, total) == (1, 2)
+
+
+def test_an_appexit_before_the_last_screen_still_counts_as_a_violation():
+    # suid 가 앱 종료를 넘어 지속되는 경우(실측 3.9%). 마지막 화면은 설명되지 않았다.
+    ev = _ev(
+        [
+            ("2026-07-27 10:00", "App", "AppLaunch", None, None, "u1", "s1"),
+            ("2026-07-27 10:01", "Pageview", "ViewPage", "홈탭_진입", "home", "u1", "s1"),
+            ("2026-07-27 10:02", "App", "AppExit", None, None, "u1", "s1"),
+            ("2026-07-27 10:09", "Pageview", "ViewPage", "홈탭_진입", "home", "u1", "s1"),
+        ]
+    )
+    violated, total = _check(_run(ev, "2026-07-27", WINDOW_27), "exit_without_appexit")
+    assert (violated, total) == (1, 1)
+
+
+def test_web_sessions_are_excluded_from_the_exit_check():
+    """웹은 종료 이벤트가 없다(실측 0~1%). 분모에 넣으면 검사가 웹 비중을 잰다.
+
+    App 타입 이벤트가 하나도 없는 세션은 애초에 AppExit 를 낼 수 없으므로 제외한다.
+    """
+    ev = _ev(
+        [
+            # 웹 세션: App 이벤트가 없다
+            ("2026-07-27 10:00", "Pageview", "ViewPage", "홈탭_진입", "home", "u1", "s1"),
+            # 앱 세션: 정상 종료
+            ("2026-07-27 10:00", "App", "AppLaunch", None, None, "u2", "s2"),
+            ("2026-07-27 10:01", "Pageview", "ViewPage", "홈탭_진입", "home", "u2", "s2"),
+            ("2026-07-27 10:05", "App", "AppExit", None, None, "u2", "s2"),
+        ]
+    )
+    violated, total = _check(_run(ev, "2026-07-27", WINDOW_27), "exit_without_appexit")
+    assert (violated, total) == (0, 1)  # 웹 세션은 분모에서 빠졌다
+
+
+def test_a_session_without_any_pageview_is_not_an_exit_case():
+    # 화면이 없으면 "마지막 화면"도 없다. 이탈 판정 대상이 아니다.
+    ev = _ev(
+        [
+            ("2026-07-27 10:00", "App", "AppLaunch", None, None, "u1", "s1"),
+            ("2026-07-27 10:01", "Event", "Click", "버튼", "home", "u1", "s1"),
+        ]
+    )
+    rows = _run(ev, "2026-07-27", WINDOW_27)
+    assert rows[rows["check_name"] == "exit_without_appexit"].empty
+
+
 def test_sessions_are_attributed_to_the_first_event_day():
     # 첫 이벤트가 D 인 세션만 세션 검사에 든다.
     ev = _ev(

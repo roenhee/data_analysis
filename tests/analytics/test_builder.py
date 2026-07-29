@@ -184,6 +184,29 @@ def test_changing_the_aggregation_sql_misses_the_cache(config):
     assert changed[0] != first[0], "새 로직이 옛 큐브를 덮어썼다"
 
 
+def test_changing_one_cube_does_not_rebuild_the_others(config):
+    """지문은 큐브별로 따로다.
+
+    그래서 quality SQL 만 고치면 다시 돌렸을 때 quality 만 새로 만들어진다 —
+    session·transition 은 키가 그대로라 캐시 적중이다. 전체 백필을 다시 돌릴 필요가 없다.
+    """
+    kw = dict(config=config, state_dict=_sd(), window=("2026-07-27", "2026-07-27"),
+              services=["top"], source_version="sv1")
+    first = build_cubes(**kw, query_fn=FakeQuery(), cube_builders={
+        "session": _pruned(), "transition": _pruned(", 2 AS x"),
+        "quality": _pruned(", 3 AS y"),
+    })
+    assert len(first) == 3
+
+    # quality 만 고친다
+    second = build_cubes(**kw, query_fn=FakeQuery(), cube_builders={
+        "session": _pruned(), "transition": _pruned(", 2 AS x"),
+        "quality": _pruned(", 9 AS z"),
+    })
+    assert len(second) == 1, "바뀌지 않은 큐브까지 다시 만들었다"
+    assert "/quality/" in str(second[0])
+
+
 def test_the_logic_fingerprint_is_the_same_across_dates(config):
     """지문이 날짜에 흔들리면 날짜마다 다른 디렉터리가 생겨 범위 읽기가 깨진다."""
     kw = dict(config=config, state_dict=_sd(), services=["top"], source_version="sv1")

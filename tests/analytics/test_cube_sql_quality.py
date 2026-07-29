@@ -22,6 +22,7 @@ def test_declares_the_checks_from_the_spec():
         "page_name_ambiguous",
         "session_span_exceeds_timeout",
         "screen_without_dwell",
+        "exit_without_appexit",
     )
 
 
@@ -58,6 +59,13 @@ def test_session_checks_use_the_same_attribution_as_the_other_cubes():
     sql = build_quality_cube_sql(**ARGS)
     assert _first_event_attribution(ARGS["date"]) in sql
     assert "date_id IN ('2026-07-26', '2026-07-27', '2026-07-28')" in sql
+
+
+def test_exit_check_counts_only_app_sessions():
+    # 웹에는 종료 이벤트가 없다. 섞으면 이 검사가 "웹 비중"을 재게 된다.
+    sql = build_quality_cube_sql(**ARGS)
+    assert "app_events > 0" in sql
+    assert "action_kind = 'AppExit'" in sql
 
 
 def test_row_checks_are_confined_to_the_target_partition():
