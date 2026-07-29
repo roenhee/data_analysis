@@ -74,6 +74,29 @@ def test_the_envelope_carries_dwell_coverage():
     assert got.envelope["coverage"]["dwell"] == pytest.approx(87 / 160)
 
 
+def test_the_frame_carries_determinism_and_pagerank():
+    got = get_analysis("screen_flow")(_cubes()).frame.set_index("state")
+    assert {"entropy", "effective_choices", "out_degree", "top_to", "pagerank"} <= set(
+        got.columns
+    )
+    # A 는 60/40 으로 갈린다: entropy = -(0.6 ln0.6 + 0.4 ln0.4) = 0.673
+    assert got.loc["A", "entropy"] == pytest.approx(0.6730116670092565)
+    assert got.loc["A", "top_to"] == "B"
+
+
+def test_exit_within_a_horizon_is_only_added_when_asked_for():
+    """k 를 발명하지 않는다 — 어느 지평이 궁금한지는 부르는 쪽이 안다."""
+    plain = get_analysis("screen_flow")(_cubes())
+    assert not [c for c in plain.frame.columns if c.startswith("p_exit_within")]
+
+    asked = get_analysis("screen_flow")(_cubes(), exit_within=(1, 2))
+    # A 는 1걸음 안에 0.4, 2걸음 안에 0.4 + 0.6*1.0 = 1.0
+    row = asked.frame.set_index("state").loc["A"]
+    assert row["p_exit_within_1"] == pytest.approx(0.4)
+    assert row["p_exit_within_2"] == pytest.approx(1.0)
+    assert asked.headline["mean_p_exit_within_2"] == pytest.approx(1.0)
+
+
 def test_an_empty_transition_frame_raises_rather_than_returning_zeros():
     empty = CubeSet(session=None, transition=_edges([]).iloc[0:0], quality=None,
                     state_dict_version="sd_abc", services=["top"],

@@ -14,8 +14,11 @@ from analytics.metrics.coverage import dwell_coverage
 from analytics.metrics.markov import (
     EXIT,
     absorption_probabilities,
+    determinism,
     exit_probabilities,
     expected_steps_to_exit,
+    p_exit_within,
+    pagerank,
     stationary_distribution,
     transition_matrix,
 )
@@ -41,8 +44,9 @@ def _thin_cell_warning(edges: pd.DataFrame) -> list[dict]:
 
 
 @analysis("screen_flow")
-def screen_flow(cubes: CubeSet, **_) -> AnalysisResult:
-    """화면별 이탈확률·정상분포·EXIT 까지의 기대 걸음 수.
+def screen_flow(cubes: CubeSet, exit_within: tuple[int, ...] = (),
+                damping: float = 0.85, **_) -> AnalysisResult:
+    """화면별 이탈확률·정상분포·기대 걸음 수·결정성·PageRank.
 
     `headline` 은 **방문 가중**이다. 화면끼리 단순 평균하면 방문이 거의 없는 화면이
     흔한 화면과 같은 무게를 갖고, 세그먼트마다 등장하는 화면 집합이 달라서 비교가
@@ -50,6 +54,10 @@ def screen_flow(cubes: CubeSet, **_) -> AnalysisResult:
 
     기대 걸음 수가 `inf` 면 그대로 낸다 — 빠져나올 수 없는 곳으로 갈 확률이 있으면
     기대값은 실제로 발산한다. 유한한 수로 반올림하면 그럴듯한 거짓말이 된다.
+
+    `exit_within` 을 주면 그 지평마다 "k 걸음 안에 이탈" 열을 붙인다. **기본값은
+    없다** — 어느 지평이 궁금한지는 부르는 쪽이 안다. 기대 걸음 수(평균)와 달리
+    분포의 한 점이라, `inf` 가 섞인 체인에서도 읽을 수 있는 값이다.
 
     PMI 는 넣지 않는다. 쌍(from, to) 단위 지표라 화면 한 줄에 담으려면 "어느 셀부터
     믿을 만한가" 하는 임계치를 발명해야 하고, 얇은 셀의 PMI 가 가장 크게 튄다.
@@ -66,21 +74,35 @@ def screen_flow(cubes: CubeSet, **_) -> AnalysisResult:
     ).merge(
         absorption_probabilities(P).rename(columns={EXIT: "p_reach_exit"}),
         on="state", how="left",
+    ).merge(
+        determinism(P), on="state", how="left"
+    ).merge(
+        pagerank(P, damping=damping), on="state", how="left"
     )
+    for k in exit_within:
+        horizon = p_exit_within(P, k).set_index("state")["p_exit_within"]
+        frame[f"p_exit_within_{k}"] = [horizon[s] for s in frame["state"]]
+
     visits = {s: float(P.counts[i].sum()) for i, s in enumerate(P.states)}
     frame["visits"] = [visits[s] for s in frame["state"]]
 
     total_visits = float(frame["visits"].sum())
+    headline = {}
     if total_visits > 0:
         weights = frame["visits"] / total_visits
-        mean_steps = float((frame["expected_steps"] * weights).sum())
-        mean_exit = float((frame["exit_prob"] * weights).sum())
+        headline["mean_expected_steps"] = float(
+            (frame["expected_steps"] * weights).sum()
+        )
+        headline["mean_exit_prob"] = float((frame["exit_prob"] * weights).sum())
+        for k in exit_within:
+            headline[f"mean_p_exit_within_{k}"] = float(
+                (frame[f"p_exit_within_{k}"] * weights).sum()
+            )
     else:
-        mean_steps = mean_exit = float("nan")
+        headline["mean_expected_steps"] = headline["mean_exit_prob"] = float("nan")
 
     return AnalysisResult(
-        frame=frame, headline={"mean_expected_steps": mean_steps,
-                               "mean_exit_prob": mean_exit},
+        frame=frame, headline=headline,
         compare_key="state",
         envelope=envelope_for(
             cubes, {"dwell": dwell_coverage(edges)}, _thin_cell_warning(edges)

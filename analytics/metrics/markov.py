@@ -213,6 +213,106 @@ def absorption_probabilities(
     return pd.DataFrame(out)
 
 
+def determinism(P: TransitionMatrix) -> pd.DataFrame:
+    """화면별 다음 걸음의 **결정성**. 엔트로피가 낮으면 경로가 예측 가능하다.
+
+    엔트로피는 자연로그이고 `effective_choices = exp(entropy)` 는 **실질 선택지 수**다.
+    확률이 0.98/0.01/0.01 이면 선택지는 3개지만 실질은 1.06개다 — `out_degree` 만
+    보면 "갈 곳이 세 군데" 라고 읽히므로 둘을 함께 낸다.
+
+    관측된 다음 걸음이 없는 화면은 `NaN` 이다. `transition_matrix` 가 그런 행에 자기
+    루프를 주므로 행렬을 그대로 재면 엔트로피 0 이 나와 "확실히 제자리에 머문다" 는
+    없는 사실이 된다. 그래서 확률이 아니라 **카운트**에서 잰다.
+    """
+    rows = []
+    for state in _screen_states(P):
+        counts = P.counts[P.states.index(state)]
+        total = counts.sum()
+        if total <= 0:
+            rows.append({"state": state, "entropy": np.nan, "hhi": np.nan,
+                         "top_p": np.nan, "effective_choices": np.nan,
+                         "out_degree": 0, "top_to": None})
+            continue
+        p = counts / total
+        nonzero = p[p > 0]
+        entropy = float(-(nonzero * np.log(nonzero)).sum())
+        top = int(np.argmax(counts))
+        rows.append({
+            "state": state,
+            "entropy": entropy,
+            "hhi": float((p ** 2).sum()),
+            "top_p": float(p[top]),
+            "effective_choices": float(np.exp(entropy)),
+            "out_degree": int((counts > 0).sum()),
+            "top_to": P.states[top],
+        })
+    return pd.DataFrame(rows)
+
+
+def p_exit_within(P: TransitionMatrix, k: int) -> pd.DataFrame:
+    """k 걸음 안에 EXIT 에 닿을 확률. 기대 걸음 수(평균)와 달리 분포의 한 점이다.
+
+    EXIT 가 **흡수 상태**여야 `P^k` 의 EXIT 열이 "k 걸음 안에 닿았다" 가 된다. 흡수가
+    아니면 같은 값이 "정확히 k 걸음 뒤 EXIT 에 있다" 로 바뀌어, 나갔다 다시 들어온
+    경우를 빼먹은 과소 추정이 된다. 그래서 흡수인지 확인하고 아니면 거부한다.
+    """
+    if k < 1:
+        raise ValueError(f"k must be at least 1, got {k}")
+    screens = _screen_states(P)
+    if EXIT not in P.states:
+        return pd.DataFrame(
+            {"state": screens, "k": k, "p_exit_within": [0.0] * len(screens)}
+        )
+    exit_index = P.states.index(EXIT)
+    if P.counts[exit_index].sum() > 0:
+        raise ValueError(
+            f"{EXIT} has outgoing transitions in this chain, so it is not absorbing "
+            "and the EXIT column of P^k reads as 'in EXIT at exactly step k' rather "
+            "than 'reached EXIT within k steps'"
+        )
+    powered = np.linalg.matrix_power(P.matrix, k)
+    return pd.DataFrame({
+        "state": screens,
+        "k": k,
+        "p_exit_within": [float(powered[P.states.index(s), exit_index])
+                          for s in screens],
+    })
+
+
+def pagerank(P: TransitionMatrix, damping: float = 0.85) -> pd.DataFrame:
+    """감쇠 랜덤서퍼 중심성. stationary 와 **다른 질문**에 답한다 —
+    stationary 는 "실제로 얼마나 머무는가", pagerank 는 "구조적으로 얼마나 중심인가".
+
+    화면 전용 부분체인 위에서 잰다(stationary 와 같은 그래프라야 대조가 성립한다).
+    나가는 화면 엣지가 없는 행은 균등 텔레포트로 흘린다 — stationary 는 같은 행에 자기
+    루프를 주므로, 흡수 구조에서 두 지표가 갈리는 지점이 바로 여기다.
+    """
+    screens = _screen_states(P)
+    if not screens:
+        raise ValueError("no screen states: the chain is only START/EXIT")
+    size = len(screens)
+    idx = [P.states.index(s) for s in screens]
+    sub = P.matrix[np.ix_(idx, idx)]
+
+    totals = sub.sum(axis=1)
+    walk = np.empty_like(sub)
+    for i, total in enumerate(totals):
+        walk[i] = sub[i] / total if total > 0 else np.full(size, 1.0 / size)
+
+    rank = np.full(size, 1.0 / size)
+    for _ in range(1000):
+        moved = (1.0 - damping) / size + damping * (walk.T @ rank)
+        if np.abs(moved - rank).sum() < 1e-14:
+            rank = moved
+            break
+        rank = moved
+    else:
+        raise ValueError(
+            f"pagerank did not converge in 1000 iterations at damping={damping}"
+        )
+    return pd.DataFrame({"state": screens, "pagerank": rank})
+
+
 def pointwise_mutual_information(P: TransitionMatrix) -> pd.DataFrame:
     """관측 전이가 독립 가정보다 얼마나 흔한가.
 
