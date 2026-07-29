@@ -46,10 +46,22 @@ the quality cube keys on `service_code`.
 
 Every dwell result carries a `dwell_definition` column. Do not pool them.
 
-**이탈 = 그 세션의 마지막 화면.** Not a timeout, not an explicit close event. In app
-sessions 88.6% do carry an `AppExit` right after, but web has no such signal at all, so
-for web this means only "the log stopped". `service_type` is an axis — split MA / MW / PW
-before quoting an exit rate.
+**이탈 = 그 세션의 마지막 화면.** Not a timeout, not an explicit close event. Measured
+over 14 days, 89.2% of app sessions carry an `AppExit` right after, but web has no such
+signal at all, so for web this means only "the log stopped". `service_type` is an axis —
+split MA / MW / PW before quoting an exit rate.
+
+**버전 비교는 겹치는 날짜 위에서만.** App versions roll out in stages, so two versions
+normally do **not** occupy the same range of dates — 9.5.0 ran 2%→91% over eleven days
+before 9.5.1 appeared at all. Comparing across the full window measures the calendar:
+expected steps read **+2.9%** that way against **−0.2%** on the shared dates, sign
+included. Always route a version delta through `compare.restrict_to_comparable`, which
+refuses a disjoint pair outright.
+
+**`period` 는 귀속일이다.** The date the session started, matching the file's `date=`
+partition. It is not the `date_id` the first event was written to — those disagree on
+0.09% of sessions, skewed toward D+1, because events near midnight land in the next
+partition.
 
 ## Recipe
 
@@ -57,6 +69,7 @@ before quoting an exit rate.
 # PYTHONPATH=. .venv/bin/python this_script.py
 from analytics.metrics import load_cube
 from analytics.metrics.descriptive import engagement, screen_dwell, uv_pv
+from analytics.metrics.compare import restrict_to_comparable
 from analytics.metrics.envelope import Envelope, quality_warnings
 from analytics.metrics.frame import select_segment
 from analytics.metrics.markov import (
@@ -76,8 +89,11 @@ edges = load_cube(config, dates=dates, cube_name="transition", **key).require_co
 uv_pv(sessions.frame, folded=("os", "gender", "age_band", "daypart"))
 engagement(sessions.frame, folded=("os", "gender", "age_band", "daypart"))
 
+# 버전 비교 — 두 버전이 함께 존재하는 날짜로 먼저 좁힌다
+pair = restrict_to_comparable(edges.frame, "app_version", "9.5.1", "9.5.0")
+
 # 마르코프 — 세그먼트를 먼저 좁히고 행렬을 만든다
-seg = select_segment(edges.frame, app_version="9.5.1", service_type="MA")
+seg = select_segment(pair, app_version="9.5.1", service_type="MA")
 P = transition_matrix(seg)
 exit_probabilities(P)
 stationary_distribution(P)
@@ -101,6 +117,11 @@ envelope = Envelope.for_cube(edges, state_dict_version=..., services=["top", "me
   `full_combination_rows` or `rollup_rows`.
 - **Screen dwell divides by `dur_n`, not `cnt`.** Dividing by `cnt` deflates the mean by
   exactly the coverage ratio.
+- **Route version deltas through `restrict_to_comparable`.** A delta across disjoint
+  date windows measures the rollout schedule, not the version, and the sign can flip.
+- **Never read rollups from a multi-day frame.** Each cube file carries its own rollup
+  rows, so concatenating days then reading a rollup returns several rows for one
+  coordinate; summing them silently multiplies. `rollup_rows` raises instead.
 - **Attach an `Envelope`.** Coverage, quality warnings, the state dictionary version,
   the service scope, and which dates were actually read.
 
