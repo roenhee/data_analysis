@@ -5,8 +5,13 @@ import pandas as pd
 
 from analytics.analyses.base import AnalysisResult, CubeSet, analysis, envelope_for
 from analytics.metrics.calendar import day_kind
-from analytics.metrics.coverage import demography_coverage
-from analytics.metrics.descriptive import SESSION_AXES, engagement, uv_pv
+from analytics.metrics.coverage import demography_coverage, dwell_coverage
+from analytics.metrics.descriptive import (
+    SESSION_AXES,
+    engagement,
+    screen_dwell,
+    uv_pv,
+)
 from analytics.metrics.frame import rollup_rows
 
 
@@ -61,4 +66,55 @@ def session_trend(cubes: CubeSet, holidays: set[str] | None = None,
         frame=frame, headline=headline, compare_key="period",
         envelope=envelope_for(cubes, demography_coverage(cubes.session)),
         viz={"kind": "line", "x": "period"},
+    )
+
+
+@analysis("screen_dwell_rank")
+def screen_dwell_rank(cubes: CubeSet, warn_below: float = 0.5,
+                      **_) -> AnalysisResult:
+    """화면별 방문당 체류(초) 순위.
+
+    **분모는 `cnt` 가 아니라 `dur_n` 이다.** 측정되지 않은 방문까지 분모에 넣으면
+    커버리지만큼 축소된 값이 나온다 — 실측 6.67초 대 10.0초.
+
+    `headline` 은 측정된 방문으로 가중한다(= 전체 `dur_sum` / 전체 `dur_n`). 화면끼리
+    단순 평균하면 방문이 거의 없는 화면이 흔한 화면과 같은 무게를 갖는다.
+
+    커버리지도 `headline` 에 넣는다. 세그먼트끼리 커버리지가 다르면 조건부 평균은
+    애초에 비교가 안 되는데, headline 에 있으면 `compare` 가 그 델타를 함께 낸다.
+
+    커버리지가 `warn_below` 미만이면 경고한다. **막지 않는다** — 조건부 평균 자체는
+    옳고, 그게 전수를 대표하지 못한다는 사실만 봉투에 실어 보낸다.
+    """
+    edges = cubes.transition
+    if edges is None:
+        raise ValueError("screen_dwell_rank needs the transition cube; it is absent")
+    frame = screen_dwell(edges).sort_values(
+        "seconds_per_visit", ascending=False, ignore_index=True
+    )
+
+    # 체류가 측정된 방문이 없는 화면은 분자도 분모도 없다. NaN 을 곱해 넣으면
+    # 가중합 전체가 NaN 이 되므로 먼저 뺀다.
+    usable = frame.dropna(subset=["seconds_per_visit"])
+    measured = float(usable["measured_visits"].sum())
+    coverage = dwell_coverage(edges)
+
+    warnings = []
+    if coverage < warn_below:
+        warnings.append({
+            "check_name": "low_dwell_coverage",
+            "coverage": float(coverage),
+            "threshold": float(warn_below),
+        })
+
+    headline = {
+        "mean_seconds_per_visit": float(
+            (usable["seconds_per_visit"] * usable["measured_visits"]).sum() / measured
+        ) if measured > 0 else float("nan"),
+        "dwell_coverage": float(coverage),
+    }
+    return AnalysisResult(
+        frame=frame, headline=headline, compare_key="state",
+        envelope=envelope_for(cubes, {"dwell": coverage}, warnings),
+        viz={"kind": "bar", "x": "state"},
     )
