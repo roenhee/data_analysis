@@ -10,6 +10,14 @@ from data_layer.manifest import Manifest
 from data_layer.util import content_hash
 
 
+def result_id(run_id: str, analysis_type: str, title: str) -> str:
+    """발행물 id. **파라미터는 들어가지 않는다** — 같은 제목으로 다른 파라미터를 발행하면
+    같은 id 가 나와 덮어쓰기가 된다. 그 덮어쓰기를 막아야 하는 호출자가 미리 물어볼 수
+    있도록 공개한다(`analyses.base.publish`).
+    """
+    return content_hash(run_id, analysis_type, title)
+
+
 def publish_result(
     config: Config,
     run_id: str,
@@ -30,7 +38,7 @@ def publish_result(
     id는 (run_id, analysis_type, title)로 결정적. ②가 호출한다.
     """
     config.ensure_dirs()
-    rid = content_hash(run_id, analysis_type, title)
+    rid = result_id(run_id, analysis_type, title)
     if created_at is None:
         created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
 

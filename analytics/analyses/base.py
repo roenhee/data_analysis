@@ -5,13 +5,16 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import functools
+import inspect
+import json
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 import pandas as pd
 
 from data_layer.config import Config
-from data_layer.results import publish_result
+from data_layer.results import publish_result, result_id
 
 # 봉투에 반드시 있어야 하는 것. 하나라도 빠지면 발행을 거부한다 —
 # 커버리지 57% 짜리 체류가 전수로 읽히는 것을 막는 유일한 장치다.
@@ -27,6 +30,10 @@ class IncompleteEnvelopeError(ValueError):
 
 class UnknownAnalysisError(KeyError):
     """레지스트리에 없는 분석 이름."""
+
+
+class ConflictingPublicationError(ValueError):
+    """같은 제목으로 **다른 파라미터**의 결과를 발행하려 했다."""
 
 
 @dataclass(frozen=True)
@@ -78,6 +85,9 @@ class AnalysisResult:
     다르지만 headline 은 항상 `{이름: 수}` 라 `compare` 가 분석 종류를 안 가린다.
 
     `compare_key` 를 주면 연산자가 그 컬럼으로 행끼리 조인해 행별 델타도 낸다.
+
+    `params` 는 이 결과를 만든 호출 파라미터다. `@analysis` 가 채우므로 분석이 직접
+    적을 필요는 없다 — 적으면 그쪽이 이긴다.
     """
 
     frame: pd.DataFrame
@@ -85,6 +95,7 @@ class AnalysisResult:
     envelope: dict
     compare_key: str | None = None
     viz: dict = field(default_factory=dict)
+    params: dict = field(default_factory=dict)
 
 
 def envelope_for(
@@ -112,12 +123,61 @@ def envelope_for(
 _REGISTRY: dict[str, Callable] = {}
 
 
+def _canonical(value):
+    """발행물에 실을 안정적인 형태로 바꾼다.
+
+    **집합은 정렬한다.** `repr` 순서가 프로세스마다 다르므로(문자열 해시 무작위화)
+    그대로 기록하면 같은 호출이 실행마다 다른 파라미터로 남고, 재발행이 거짓 충돌로
+    거부된다. 튜플·리스트도 JSON 이 리스트로 만드니 미리 맞춰 둔다.
+    """
+    if isinstance(value, (set, frozenset)):
+        return sorted(_canonical(v) for v in value)
+    if isinstance(value, (list, tuple)):
+        return [_canonical(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _canonical(v) for k, v in sorted(value.items(),
+                                                        key=lambda kv: str(kv[0]))}
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _called_with(fn: Callable, cubes, params: dict) -> dict:
+    """호출에 쓰인 파라미터 전부. **기본값도 포함한다.**
+
+    기본값을 빼면 나중에 기본값이 바뀌었을 때 옛 발행물의 숫자를 재현할 수 없고, 발행물만
+    보고는 그게 바뀐 줄도 모른다. 큐브 인자와 `**_` 는 파라미터가 아니라 뺀다.
+    """
+    signature = inspect.signature(fn)
+    bound = signature.bind(cubes, **params)
+    bound.apply_defaults()
+    variadic = {
+        name for name, p in signature.parameters.items()
+        if p.kind in (p.VAR_KEYWORD, p.VAR_POSITIONAL)
+    }
+    first = next(iter(signature.parameters), None)
+    return {
+        key: _canonical(value) for key, value in bound.arguments.items()
+        if key != first and key not in variadic
+    }
+
+
 def analysis(name: str):
-    """이름 붙은 분석으로 등록한다. Claude·대시보드가 이 목록에서만 고른다."""
+    """이름 붙은 분석으로 등록한다. Claude·대시보드가 이 목록에서만 고른다.
+
+    호출 파라미터를 결과에 기록한다 — 분석마다 손으로 적게 하면 하나는 빠뜨리고, 그
+    누락은 조용하다. 가드를 연산자 한 곳에 모은 것과 같은 이유다.
+    """
     def wrap(fn):
-        _REGISTRY[name] = fn
-        fn.analysis_name = name
-        return fn
+        @functools.wraps(fn)
+        def called(cubes, **params):
+            result = fn(cubes, **params)
+            recorded = _called_with(fn, cubes, params)
+            return replace(result, params={**recorded, **result.params})
+
+        called.analysis_name = name
+        _REGISTRY[name] = called
+        return called
     return wrap
 
 
@@ -153,6 +213,7 @@ def publish(
             f"envelope is missing {', '.join(missing)}; a result without coverage and "
             "the dictionary version reads as full-population when it is not"
         )
+    _refuse_a_conflicting_overwrite(config, result, run_id, analysis_type, title)
     return publish_result(
         config=config,
         run_id=run_id,
@@ -161,10 +222,38 @@ def publish(
         title=title,
         data=result.frame,
         viz={**result.viz, "headline": result.headline},
-        params={"envelope": result.envelope},
+        params={"envelope": result.envelope, "analysis": result.params},
         config_version=result.envelope["state_dict_version"],
         insight=insight,
         caveats=_caveats(result.envelope),
+    )
+
+
+def _refuse_a_conflicting_overwrite(
+    config: Config, result: AnalysisResult, run_id: str, analysis_type: str, title: str
+) -> None:
+    """같은 제목으로 다른 파라미터의 결과를 발행하려 하면 막는다.
+
+    id 는 `(run_id, analysis_type, title)` 로만 정해진다 — 그래야 대시보드가 같은
+    세그먼트를 열 번 봐도 발행물이 하나다. 그 대가로 **파라미터가 다르면 조용히 덮어써진다.**
+    발행물 하나가 두 계산을 가리키게 되므로, 같은 호출을 다시 발행하는 것만 허용한다.
+    """
+    path = config.results_dir / f"{result_id(run_id, analysis_type, title)}.json"
+    if not path.exists():
+        return
+    previous = json.loads(path.read_text()).get("params", {}).get("analysis")
+    current = _canonical(result.params)
+    if previous is None or previous == current:
+        return
+    differing = sorted(
+        set(previous) ^ set(current)
+        | {k for k in set(previous) & set(current) if previous[k] != current[k]}
+    )
+    raise ConflictingPublicationError(
+        f"{title!r} in run {run_id!r} was already published with different analysis "
+        f"parameters ({', '.join(differing)}); the id is derived from the title alone, "
+        "so publishing this would overwrite a different computation — give it a title "
+        "that says which parameters it used"
     )
 
 

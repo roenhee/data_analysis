@@ -3,6 +3,7 @@ import pytest
 
 from analytics.analyses.base import (
     AnalysisResult,
+    ConflictingPublicationError,
     CubeSet,
     IncompleteEnvelopeError,
     UnknownAnalysisError,
@@ -113,6 +114,82 @@ def test_publishing_the_same_thing_twice_yields_one_result(config):
     publish(config, r, run_id="r1", analysis_type="t", title="x")
     publish(config, r, run_id="r1", analysis_type="t", title="x")
     assert len(list_results(config, run_id="r1")) == 1
+
+
+@analysis("dummy_with_knobs")
+def _dummy_with_knobs(cubes, horizon: int = 10, damping: float = 0.85, **_):
+    return AnalysisResult(frame=pd.DataFrame({"x": [horizon]}), headline={},
+                          envelope=FULL_ENVELOPE)
+
+
+def test_the_registry_records_the_parameters_a_call_was_made_with():
+    """발행물이 '무엇이 이 숫자를 만들었나' 를 말해야 한다.
+
+    분석마다 손으로 적으면 하나는 빠뜨리고 그 누락은 조용하다. 레지스트리가 기록한다.
+    """
+    got = get_analysis("dummy_with_knobs")(_cubes(), horizon=3)
+    assert got.params == {"horizon": 3, "damping": 0.85}
+
+
+def test_default_parameters_are_recorded_too():
+    """기본값이 나중에 바뀌면 옛 발행물의 숫자를 재현할 수 없다."""
+    got = get_analysis("dummy_with_knobs")(_cubes())
+    assert got.params == {"horizon": 10, "damping": 0.85}
+
+
+def test_the_recorded_parameters_reach_the_published_envelope(config):
+    from data_layer.results import read_result
+    got = get_analysis("dummy_with_knobs")(_cubes(), horizon=7)
+    _, env = read_result(config, publish(config, got, run_id="r1",
+                                         analysis_type="dummy", title="x"))
+    assert env["params"]["analysis"] == {"horizon": 7, "damping": 0.85}
+    assert env["params"]["envelope"]["state_dict_version"] == "sd_abc"
+
+
+def test_publishing_different_parameters_under_the_same_title_is_refused(config):
+    """id 는 (run_id, analysis_type, title) 로만 정해진다 — 파라미터는 안 들어간다.
+
+    그래서 제목이 같으면 다른 파라미터의 결과가 조용히 덮어써진다. 발행물 하나가
+    두 계산을 가리키게 되므로 막는다.
+    """
+    first = get_analysis("dummy_with_knobs")(_cubes(), horizon=3)
+    second = get_analysis("dummy_with_knobs")(_cubes(), horizon=9)
+    publish(config, first, run_id="r1", analysis_type="dummy", title="같은 제목")
+    with pytest.raises(ConflictingPublicationError, match="horizon"):
+        publish(config, second, run_id="r1", analysis_type="dummy", title="같은 제목")
+
+
+@analysis("dummy_with_a_set")
+def _dummy_with_a_set(cubes, holidays: set[str] | None = None, **_):
+    return AnalysisResult(frame=pd.DataFrame({"x": [1]}), headline={},
+                          envelope=FULL_ENVELOPE)
+
+
+def test_a_set_parameter_is_recorded_in_a_stable_order():
+    """집합의 `repr` 순서는 프로세스마다 다르다(문자열 해시가 무작위화된다).
+
+    그대로 기록하면 같은 호출이 실행마다 다른 파라미터로 남고, 재발행이 거짓 충돌로
+    거부된다. 정렬해 담는다.
+    """
+    got = get_analysis("dummy_with_a_set")(_cubes(), holidays={"2026-08-15",
+                                                              "2026-01-01"})
+    assert got.params["holidays"] == ["2026-01-01", "2026-08-15"]
+
+
+def test_republishing_a_call_with_a_set_parameter_is_not_a_conflict(config):
+    holidays = {"2026-01-01", "2026-03-01", "2026-05-05", "2026-08-15"}
+    got = get_analysis("dummy_with_a_set")(_cubes(), holidays=holidays)
+    publish(config, got, run_id="r3", analysis_type="dummy", title="x")
+    publish(config, got, run_id="r3", analysis_type="dummy", title="x")
+
+
+def test_republishing_the_identical_call_is_still_idempotent(config):
+    """대시보드가 같은 세그먼트를 열 번 봐도 발행물은 하나여야 한다."""
+    from data_layer.results import list_results
+    got = get_analysis("dummy_with_knobs")(_cubes(), horizon=3)
+    publish(config, got, run_id="r2", analysis_type="dummy", title="x")
+    publish(config, got, run_id="r2", analysis_type="dummy", title="x")
+    assert len(list_results(config, run_id="r2")) == 1
 
 
 def test_the_registry_finds_a_declared_analysis():
