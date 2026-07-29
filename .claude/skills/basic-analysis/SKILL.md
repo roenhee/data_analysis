@@ -86,6 +86,7 @@ partition.
 | `session_trend` | session | 날짜별 UV·PV·세션·체류 (세그먼트로 자르면 `uv` 는 NaN, 봉투에 경고) | `sessions`·`pv_per_session`·`seconds_per_session` | `holidays` |
 | `screen_dwell_rank` | transition | 화면별 방문당 체류 순위 | `mean_seconds_per_visit`·`dwell_coverage` | `warn_below` |
 | `screen_flow` | transition | 화면별 이탈·정상분포·기대 걸음 수·엔트로피·PageRank | `mean_expected_steps`·`mean_exit_prob` | `exit_within`·`damping` |
+| `screen_pair_affinity` | transition | **쌍**(from, to)별 PMI + `cnt` (PMI 내림차순) | `mutual_information`·`pairs` | — |
 | `reachability` | transition | k 걸음 안에 목표 화면에 닿을 확률 곡선 | `p_hit_within_{max_k}` | `source`·`target`·`max_k` **(필수)** |
 | `screen_communities` | transition | 화면 군집 (Louvain) | `communities`·`modularity` | `seed`·`resolution` |
 | `quality_report` | quality | 검사별·날짜별 위반 비율 | `worst_{검사}`·`exit_corroboration` | `thresholds` |
@@ -100,11 +101,23 @@ partition.
 `uv_unavailable_for_this_slice` 가 실린다. **버전별 `uv` 가 필요하면** 세션 큐브에
 `(period, app_version)` grouping set 을 추가해 다시 빌드해야 한다 — 그때만 하는 일이다.
 
-**PMI 는 아직 이름 붙은 분석이 없다.** `metrics.markov.pointwise_mutual_information` 은
-있지만 쌍(from, to) 단위라 화면 한 줄짜리 프레임에 안 들어간다 — 넣으려면 "어느 셀부터
-믿을 만한가" 하는 임계치를 발명해야 하고, 하필 얇은 셀의 PMI 가 가장 크게 튄다(실측 엣지
-셀 cnt 중앙값 9, 18.9% 가 1). 쌍 모양의 분석을 따로 만들 때까지 PMI 는 탐색용이고
-**발행되지 않는다.**
+**PMI 는 `screen_pair_affinity` 로 발행한다.** 쌍(from, to) 단위라 화면 한 줄짜리
+프레임에 안 들어가서 `screen_flow` 와 분석이 따로다. **임계치는 발명하지 않았다** — 얇은
+셀의 PMI 가 가장 크게 튀므로(실측 엣지 셀 cnt 중앙값 9, 18.9% 가 1) `cnt` 를 함께 내고
+소비자가 그 열로 거른다. 봉투의 `thin_transition_cells` 가 그 비율을 적어 보낸다.
+
+`headline` 의 `mutual_information` 은 `Σ p(i,j)·PMI(i,j)` = I(현재 화면; 다음 화면),
+단위는 nats 다. 쌍마다 값이 다른 PMI 와 달리 **세그먼트끼리 견줄 수 있는 스칼라**다 —
+0 이면 다음 화면이 현재와 독립이고, 완전히 결정적이며 후보가 둘이면 log(2) 다.
+`START`·`EXIT` 쌍은 빼지 않는다(`screen_communities` 와 반대다): `START→X` 가 "어느
+화면이 세션을 특징적으로 시작하는가" 라는 실제 질문이고, 상호정보량도 전이 분포 전체에
+대한 값이라야 뜻이 온전하다. 실측 0.641 nats 이고, 빼면 0.723 으로 **올라간다.**
+
+**카운트 1위는 PMI 1위가 아니다** — 실측 카운트 1위 `top/엠탑조회` 자기 루프(3억 120만)는
+251쌍 중 PMI 47위(0.397)이고, PMI 1위는 관측 263건짜리 `content_v/other` 자기
+루프(12.16)다. 상위권이 `*/other` 자기 루프로 채워지는 것 자체가 `page_name_ambiguous`
+경고와 같은 곳을 가리킨다. 하위권은 서비스를 건너뛰는 쌍(media↔top, media↔sports)으로
+PMI −11~−15.5 다.
 
 ### 실측 규모 (15일치 · 전이 3,279,905 / 세션 214,668 / 품질 251,822 행)
 
@@ -113,6 +126,7 @@ partition.
 | `session_trend` | 15행 × 11열 | 0.14s | 세션 4.91억, 세션당 PV 8.0, 체류 556.6초 |
 | `screen_dwell_rank` | 15행 × 6열 | 0.24s | 방문당 48.4초, 커버리지 56.5% |
 | `screen_flow` | 15행 × 15열 | 0.32s | 기대 걸음 수 10.62, 이탈확률 9.75% |
+| `screen_pair_affinity` | 251행 × 4열 | 0.15s | 상호정보량 0.641 nats, 얇은 셀 18.9% |
 | `screen_communities` | 15행 × 4열 | 0.48s | 군집 3개, modularity 0.394 |
 | `quality_report` | 120행 × 5열 | 0.36s | 이탈 뒷받침 89.2%, 화면 커버리지 78.0% |
 | `compare` (15일, 두 세그먼트) | — | 5.8s | 날짜별로 분석을 다시 돌리므로 가장 비싸다 |
@@ -255,6 +269,9 @@ publish(config, flow, run_id="r1", analysis_type="screen_flow", title="MA 화면
   `cubes.filter(app_version=...)` 로 따로 묻는다.
 - Passing the busiest screen pair to `reachability`. 실측에서 가장 굵은 쌍은
   `top/엠탑조회` → 자기 자신인 자기 루프이고, `reachability` 가 거부한다.
+- Quoting `screen_pair_affinity` 의 PMI 1위를 `cnt` 를 보지 않고 인용하기. 실측 1위는
+  관측 **263건**짜리 쌍이고, 엣지 셀의 18.9% 가 cnt 1 이다 — PMI 는 얇은 셀에서 가장
+  크게 튄다. 임계치를 두지 않은 대신 `cnt` 열을 함께 내므로 그 열로 걸러서 읽는다.
 - Hand-assembling a `CubeSet`. Use `load_cube_set`. Filling `present_dates` with the
   requested dates claims a partial build is complete, and no exception is raised.
 - Missing `PYTHONPATH=.` on a standalone script → `ModuleNotFoundError`.

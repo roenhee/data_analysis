@@ -1,4 +1,8 @@
-"""화면 전이 분석. `metrics/markov.py` 의 프리미티브를 화면 한 줄로 합친다."""
+"""화면 전이 분석. `metrics/markov.py` 의 프리미티브를 이름 붙인 분석으로 묶는다.
+
+대부분은 화면 한 줄짜리 프레임이지만 `screen_pair_affinity` 는 **쌍(from, to) 한 줄**이다 —
+같은 프레임에 담을 수 없어서 분석이 따로 있다.
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -19,6 +23,7 @@ from analytics.metrics.markov import (
     expected_steps_to_exit,
     p_exit_within,
     pagerank,
+    pointwise_mutual_information,
     stationary_distribution,
     transition_matrix,
 )
@@ -167,4 +172,50 @@ def reachability(cubes: CubeSet, source: str, target: str, max_k: int = 10,
             cubes, {"dwell": dwell_coverage(edges)}, _thin_cell_warning(edges)
         ),
         viz={"kind": "line", "x": "k"},
+    )
+
+
+@analysis("screen_pair_affinity")
+def screen_pair_affinity(cubes: CubeSet, **_) -> AnalysisResult:
+    """전이 쌍의 **결합 강도**(PMI). 빈도 순위와 다른 질문에 답한다.
+
+    PMI 는 "흔한 화면이라 흔한" 전이를 걸러낸다 — 카운트 1위가 PMI 1위가 아닌 것이
+    이 지표의 존재 이유다. `screen_flow` 에 넣을 수 없는 이유는 쌍 단위라 화면 한 줄에
+    안 들어가기 때문이고, 넣으려면 "어느 셀부터 믿을 만한가" 하는 임계치를 발명해야
+    한다. **임계치를 만들지 않고 `cnt` 를 함께 낸다** — 얇은 셀의 PMI 가 가장 크게 튀므로
+    소비자가 그 열을 보고 거른다.
+
+    `headline` 의 `mutual_information` 은 `Σ p(i,j)·PMI(i,j)` 로, 곧 상호정보량
+    I(현재 화면; 다음 화면) 이다(nats). "현재 화면을 알면 다음 화면을 얼마나 아는가" 이고,
+    쌍마다 값이 다른 PMI 와 달리 세그먼트끼리 견줄 수 있는 스칼라다. 0 이면 다음 화면이
+    현재와 독립이고, 완전히 결정적이며 후보가 둘이면 log(2) 다.
+
+    **`START`·`EXIT` 쌍을 빼지 않는다.** `screen_communities` 는 그 둘이 모든 화면과
+    이어져 군집을 뭉개므로 뺐지만, 여기서는 `START→X` 가 "어느 화면이 세션을 특징적으로
+    시작하는가", `X→EXIT` 가 "어느 화면이 특징적으로 끝내는가" 라는 실제 질문에 답한다.
+    상호정보량도 그 둘을 포함한 전이 분포 전체에 대한 값이라야 뜻이 온전하다.
+
+    커버리지는 비운다 — 카운트만 쓰므로 부분 측정 문제가 없다. 체류 커버리지를 실으면
+    쓰지도 않은 측정값의 신뢰도를 말하는 셈이다.
+    """
+    edges = cubes.transition
+    if edges is None:
+        raise ValueError("screen_pair_affinity needs the transition cube; it is absent")
+    P = transition_matrix(edges)
+    frame = pointwise_mutual_information(P).sort_values(
+        "pmi", ascending=False, ignore_index=True
+    )
+    total = float(frame["cnt"].sum())
+    weights = frame["cnt"] / total if total > 0 else 0.0
+    return AnalysisResult(
+        frame=frame,
+        headline={
+            "mutual_information": float((frame["pmi"] * weights).sum())
+            if total > 0 else float("nan"),
+            "pairs": float(len(frame)),
+        },
+        # `compare_key` 는 없다 — 쌍 프레임에서 `from_state` 는 유일 키가 아니라
+        # 행별 조인이 여러 `to_state` 를 한 행으로 뭉갠다.
+        envelope=envelope_for(cubes, {}, _thin_cell_warning(edges)),
+        viz={"kind": "heatmap", "x": "from_state"},
     )

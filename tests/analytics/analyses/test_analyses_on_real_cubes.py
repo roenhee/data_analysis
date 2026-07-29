@@ -111,7 +111,8 @@ def test_the_shipped_registry_is_what_it_should_be():
     """분석이 추가·삭제되면 여기서 눈에 띈다."""
     assert _shipped_analyses() == [
         "quality_report", "reachability", "screen_communities",
-        "screen_dwell_rank", "screen_flow", "session_trend",
+        "screen_dwell_rank", "screen_flow", "screen_pair_affinity",
+        "session_trend",
     ]
 
 
@@ -321,6 +322,36 @@ def test_the_session_cube_version_comparison_moves_opposite_to_the_flow_one(real
     # 램프업 첫날의 물량 불균형이 `within` 을 끌고 간다 — 그게 이 비교의 약점이다.
     ramp = split.per_stratum.set_index("period").loc["2026-07-26"]
     assert ramp["b_cnt"] / ramp["a_cnt"] > 20
+
+
+@needs_cubes
+def test_the_busiest_pair_is_not_the_most_affine_one(real_results):
+    """PMI 가 따로 있어야 하는 이유가 실측에 그대로 있다.
+
+    카운트 1위는 `top/엠탑조회` 자기 루프(3억 120만)인데 PMI 로는 251쌍 중 **47위**
+    (0.397)다. PMI 1위는 관측 263건짜리 `content_v/other` 자기 루프(12.16)다 — 얇은
+    셀의 PMI 가 가장 크게 튄다는 경고가 `cnt` 열과 함께 봉투에 있는 이유다.
+
+    상호정보량은 0.641 nats — "현재 화면을 알면 다음 화면을 얼마나 아는가" 이고,
+    쌍마다 다른 PMI 와 달리 세그먼트끼리 견줄 수 있는 스칼라다.
+    """
+    got = real_results["screen_pair_affinity"]
+    assert 0.60 < got.headline["mutual_information"] < 0.70
+    assert 240 <= got.headline["pairs"] <= 260
+
+    frame = got.frame
+    assert frame["pmi"].is_monotonic_decreasing
+    busiest = frame["cnt"].idxmax()
+    assert frame.loc[busiest, "from_state"] == frame.loc[busiest, "to_state"]
+    assert busiest > 20, "카운트 1위가 PMI 상위권이면 이 지표는 빈도의 재탕이다"
+    # PMI 1위는 얇은 셀이다 — 임계치로 막지 않고 `cnt` 를 함께 내는 근거.
+    assert frame.loc[0, "cnt"] < 10_000
+
+    # 커버리지는 비어 있다 — 카운트만 쓰므로 부분 측정 문제가 없다.
+    assert got.envelope["coverage"] == {}
+    thin = [w for w in got.envelope["warnings"]
+            if w["check_name"] == "thin_transition_cells"]
+    assert len(thin) == 1 and thin[0]["share"] == pytest.approx(0.189, abs=0.01)
 
 
 @needs_cubes
