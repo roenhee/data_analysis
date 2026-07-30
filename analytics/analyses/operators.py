@@ -14,6 +14,7 @@ from analytics.analyses.base import AnalysisResult, CubeSet, get_analysis
 from analytics.metrics.compare import comparable_dates, weight_skew
 from analytics.metrics.descriptive import SESSION_AXES
 from analytics.metrics.frame import full_combination_rows
+from analytics.metrics.services import NON_SCREEN_STATES, service_of
 
 
 @dataclass(frozen=True)
@@ -214,3 +215,111 @@ def decompose(
 
     return Decomposition(within=within, between=between, per_stratum=per,
                          composition=composition)
+
+
+@dataclass(frozen=True)
+class ServiceBreakdown:
+    """같은 분석을 서비스별로 돌린 결과.
+
+    `outside_range` 가 이 연산자의 존재 이유다. 서비스는 축이 아니라 빌드 범위라(세션
+    44.7%가 여러 서비스에 걸친다) 분석이 합산값 하나를 내는데, **그 값이 서비스별 값의
+    범위 밖일 수 있다.** 실측 15일에서 `mean_expected_steps` 합산 10.62 는 최대값
+    8.08 보다도 크다 — 화면 간 전이의 49.68%가 서비스를 건너뛰어서, 합친 체인에는 어떤
+    단일 서비스 안에도 없는 전이가 들어 있기 때문이다.
+
+    `cross_service_share` 는 서비스별로 자를 때 **사라진** 전이 비중이다. 안 내면
+    "서비스별로 다 봤다" 고 읽힌다.
+    """
+
+    frame: pd.DataFrame
+    pooled: dict[str, float]
+    outside_range: dict[str, tuple[float, float]]
+    cross_service_share: float
+    services: list[str]
+
+
+def _service_slice(cubes: CubeSet, service: str) -> CubeSet:
+    """그 서비스 안에서만 일어난 전이. 세션 경계(`START`·`EXIT`)는 남긴다."""
+    edges = cubes.transition
+
+    def belongs(column):
+        return (edges[column].map(service_of) == service) | edges[column].isin(
+            NON_SCREEN_STATES
+        )
+
+    quality = cubes.quality
+    return CubeSet(
+        session=None,
+        transition=edges[belongs("from_state") & belongs("to_state")],
+        quality=quality[quality["service_code"] == service]
+        if quality is not None and "service_code" in quality.columns
+        else None,
+        state_dict_version=cubes.state_dict_version, services=[service],
+        requested_dates=list(cubes.requested_dates),
+        present_dates=list(cubes.present_dates),
+    )
+
+
+def per_service(cubes: CubeSet, analysis_name: str, **params) -> ServiceBreakdown:
+    """`analysis_name` 을 서비스별로 돌린다. 어느 분석에나 걸린다.
+
+    서비스는 화면 이름 접두어에서 읽는다 — 큐브를 다시 만들지 않는다(`metrics/services.py`).
+    한 서비스에서 분석이 죽으면 그 행을 NaN 으로 낸다. 조용히 빼면 표가 전수처럼 읽힌다.
+    """
+    fn = get_analysis(analysis_name)
+    if cubes.transition is None:
+        raise ValueError(
+            f"{analysis_name!r} runs on a cube that cannot be split by service: the "
+            "session cube has no service column and 44.7% of sessions span more than "
+            "one service, so splitting them would double-count"
+        )
+    edges = cubes.transition.copy()
+    edges["_from_svc"] = edges["from_state"].map(service_of)
+    edges["_to_svc"] = edges["to_state"].map(service_of)
+
+    # **분모가 둘이다. 섞으면 물량이 조용히 틀린다.**
+    #  - `share`/`cnt` 는 화면에서 **출발한** 전이 기준 (`-> EXIT` 포함). 방문 가중 지표가
+    #    무엇으로 구성됐는지 말하는 값이라 화면 출발이 맞는 분모다.
+    #  - `cross_service_share` 는 화면에서 **화면으로** 간 전이 기준. 서비스를 건너뛰는지
+    #    물으려면 도착도 화면이어야 한다.
+    originating = edges[edges["_from_svc"].notna()]
+    by_service = originating.groupby("_from_svc")["cnt"].sum()
+    origin_total = float(by_service.sum())
+
+    screen_to_screen = edges[edges["_from_svc"].notna() & edges["_to_svc"].notna()]
+    s2s_total = float(screen_to_screen["cnt"].sum())
+    crossing = float(
+        screen_to_screen[
+            screen_to_screen["_from_svc"] != screen_to_screen["_to_svc"]
+        ]["cnt"].sum()
+    )
+
+    pooled = fn(cubes, **params).headline
+    rows = []
+    for service in sorted(by_service.index):
+        volume = float(by_service[service])
+        row = {"service": service, "cnt": volume,
+               "share": volume / origin_total if origin_total else float("nan")}
+        try:
+            row.update(fn(_service_slice(cubes, service), **params).headline)
+        except Exception as exc:  # 한 서비스가 죽어도 나머지는 낸다
+            row["error"] = f"{type(exc).__name__}: {exc}"
+        rows.append(row)
+    frame = pd.DataFrame(rows)
+
+    outside = {}
+    for key, value in pooled.items():
+        if key not in frame.columns:
+            continue
+        column = frame[key].dropna()
+        if column.empty:
+            continue
+        lo, hi = float(column.min()), float(column.max())
+        if value < lo or value > hi:
+            outside[key] = (lo, hi)
+
+    return ServiceBreakdown(
+        frame=frame, pooled=pooled, outside_range=outside,
+        cross_service_share=crossing / s2s_total if s2s_total else float("nan"),
+        services=sorted(by_service.index),
+    )
