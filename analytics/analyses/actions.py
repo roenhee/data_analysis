@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from analytics.analyses.base import AnalysisResult, CubeSet, analysis, envelope_for
@@ -79,4 +80,102 @@ def click_distribution(cubes: CubeSet, by: tuple[str, ...] = ("action_kind",),
         compare_key="screen",
         envelope=envelope_for(cubes, {}, warnings),
         viz={"kind": "bar", "x": "screen"},
+    )
+
+
+# 클릭이 하나도 없이 넘어간 전이의 라벨. `analytics/cube/sql.py` 의 `NO_CLICK` 과 같은 값이다.
+NO_CLICK = "(no_click)"
+
+
+def _conditional_information(rows: pd.DataFrame) -> float:
+    """I(다음 화면 ; 행동 | 현재 화면) — 단위 nats.
+
+    "현재 화면을 아는 상태에서, **행동을 더 알면** 다음 화면을 얼마나 더 아는가" 다.
+    `H(다음|현재) − H(다음|현재, 행동)` 를 현재 화면의 물량으로 가중해 합한다.
+
+    **가중이 두 겹이고 둘 다 물량이다.** 화면끼리 단순 평균하면 전이 2건짜리 화면이 1억 건
+    짜리와 같은 무게를 갖고, 한 화면 안에서 행동끼리 단순 평균하면 **음수가 나올 수 있다**
+    (실제로 90:10 픽스처에서 0.129 대신 −0.148 이 된다). 조건부 상호정보량은 정의상
+    음수가 될 수 없으므로, 음수가 나오면 가중이 틀린 것이다.
+    """
+    def entropy(counts: pd.Series) -> float:
+        total = float(counts.sum())
+        if total <= 0:
+            return 0.0
+        p = counts.to_numpy(dtype=float) / total
+        p = p[p > 0]
+        return float(-(p * np.log(p)).sum())
+
+    grand = float(rows["cnt"].sum())
+    if grand <= 0:
+        return float("nan")
+
+    out = 0.0
+    for _, per_screen in rows.groupby("from_state", observed=True):
+        weight = float(per_screen["cnt"].sum()) / grand
+        marginal = entropy(per_screen.groupby("to_state", observed=True)["cnt"].sum())
+        within = 0.0
+        screen_total = float(per_screen["cnt"].sum())
+        for _, per_kind in per_screen.groupby("action_kind", observed=True):
+            kind_weight = float(per_kind["cnt"].sum()) / screen_total
+            within += kind_weight * entropy(
+                per_kind.groupby("to_state", observed=True)["cnt"].sum()
+            )
+        out += weight * (marginal - within)
+    return out
+
+
+@analysis("conditional_flow")
+def conditional_flow(cubes: CubeSet, **_) -> AnalysisResult:
+    """어떤 행동이 다음 화면을 결정하는가. (현재 화면, 행동, 다음 화면) 별 건수와 비중.
+
+    `share_of_origin` 의 분모는 **(현재 화면, 행동)** 이다 — "이 화면에서 이걸 눌렀을 때
+    어디로 가나". `cnt` 를 전이 수로 읽으면 안 된다: 한 방문에서 클릭이 k번이면 그 전이가
+    k행으로 나온다(`analytics/cube/sql.py::build_cond_transition_cube_sql`).
+
+    `headline` 의 `action_information` 은 I(다음 화면 ; 행동 | 현재 화면) 이다(nats).
+    "현재 화면을 아는 상태에서 행동을 더 알면 다음 화면을 얼마나 더 아는가" 이고, 0 이면
+    행동이 아무것도 말해주지 않는다. `screen_pair_affinity` 의 상호정보량이 I(현재; 다음)
+    인 것과 구분된다 — 이쪽은 **현재 화면을 이미 안 다음**의 증분이다.
+
+    **`(no_click)` 은 그 계산에서 뺀다.** 행동이 아니라 "행동이 없었다" 는 사실이라,
+    행동 종류로 세면 "안 누름" 이 정보를 준 것처럼 된다. 대신 프레임에는 남기고
+    `no_click_share` 로 따로 낸다 — 빼면 "행동이 다음 화면을 결정한다" 가 행동 있는
+    전이만 본 결과가 된다.
+
+    `no_click_share` 의 분모는 **전이 큐브의 전이 수**다. 이 큐브의 `cnt` 합은 (클릭, 전이)
+    쌍이라 전이 수가 아니다(실측 3억 4,877만 대 3억 371만). 전이 큐브가 없으면 `NaN` 이다.
+    """
+    rows = cubes.cond_transition
+    if rows is None:
+        raise ValueError(
+            "conditional_flow needs the cond_transition cube; it is absent"
+        )
+
+    frame = rows.groupby(
+        ["from_state", "action_kind", "to_state"], as_index=False, observed=True
+    )["cnt"].sum()
+    origin = frame.groupby(["from_state", "action_kind"])["cnt"].transform("sum")
+    frame["share_of_origin"] = frame["cnt"] / origin
+    frame = frame.sort_values("cnt", ascending=False, ignore_index=True)
+
+    acted = frame[frame["action_kind"] != NO_CLICK]
+    no_click = float(frame.loc[frame["action_kind"] == NO_CLICK, "cnt"].sum())
+
+    transitions = float("nan")
+    edges = cubes.transition
+    if edges is not None and not edges.empty:
+        transitions = float(edges["cnt"].sum())
+
+    return AnalysisResult(
+        frame=frame,
+        headline={
+            "action_information": _conditional_information(acted)
+            if not acted.empty else float("nan"),
+            "no_click_share": no_click / transitions
+            if transitions and transitions > 0 else float("nan"),
+        },
+        compare_key="from_state",
+        envelope=envelope_for(cubes, {}),
+        viz={"kind": "heatmap", "x": "from_state"},
     )
