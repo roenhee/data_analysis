@@ -555,6 +555,21 @@ git commit -m "feat: add the conditional transition cube keyed on action kind"
 
 ### Task 4: `path` 큐브 SQL — 상위 200 컷과 **잘린 꼬리**
 
+> **2026-07-30 구현에서 접근을 바꿨다.** 아래 본문은 배열(`slice`·`sequence`·`array_join`)로
+> n-gram 을 만들고 방언 차이표를 두는 방식인데, **배열을 아예 쓰지 않으면 그 표가 필요 없다** —
+> `lead(state, i)` 를 `||` 로 이어 붙이면 Trino 와 DuckDB 에서 같다. `slice` 의 세 번째 인자가
+> 길이(Trino)냐 끝 인덱스(DuckDB)냐 하는 차이가 이 단계에서 가장 위험한 자리였는데, 그걸
+> 제거한다. 아래 방언 표는 참고로 남긴다.
+>
+> 구현에서 추가로 정한 것 둘:
+> - **명명 윈도(`WINDOW w AS ...`)를 쓰지 않는다.** `UNION ALL` 갈래마다 같은 이름을 쓰면
+>   DuckDB 가 `window "w" is already defined` 로 거부한다 — 스코프가 방언마다 다르다.
+>   **문자열 테스트 9개는 전부 통과한 상태였고 의미 테스트가 잡았다.**
+> - **순위 tie-break 를 `path` 로 고정한다.** `ORDER BY cnt DESC` 만이면 200위와 201위가
+>   실행마다 바뀌어 같은 입력에서 다른 큐브가 나온다(Louvain 에서 같은 종류를 밟았다).
+> - `top_n` 을 인자로 뺐다 — 기본값 200 은 픽스처로 넘길 수 없어서 컷과 `(other)` 행이
+>   검증되지 않은 채 남는다.
+
 **Files:**
 - Modify: `analytics/cube/sql.py`
 - Create: `tests/analytics/test_cube_sql_path.py`

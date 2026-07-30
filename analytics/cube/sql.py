@@ -699,3 +699,121 @@ def build_cond_transition_cube_sql(
         "JOIN kept k ON k.uuid = p.uuid AND k.suid = p.suid\n"
         f"GROUP BY {axis_cols}, p.from_state, p.action_kind, p.to_state\n"
     )
+
+
+# n-gram 길이. 3 미만은 전이 큐브가 이미 답하고, 5 초과는 경로 수가 폭발한다.
+PATH_LENGTHS = (3, 4, 5)
+# 세그먼트×n 당 남기는 경로 수. 나머지는 `(other)` 한 행으로 접고 총합을 보존한다.
+PATH_TOP_N = 200
+# 잘린 꼬리를 담는 경로 이름.
+OTHER_PATH = "(other)"
+
+
+def _ngram_expr(n: int) -> str:
+    """길이 `n` 경로 문자열. **배열도 명명 윈도도 쓰지 않는다.**
+
+    Trino `slice(arr, start, 길이)` 와 DuckDB `list_slice(arr, begin, 끝인덱스)` 는 세 번째
+    인자의 뜻이 다르다. 배열로 만들면 의미 테스트(DuckDB)가 프로덕션(Trino)과 **다른 길이**의
+    n-gram 을 검증하게 되고, 그 오차는 예외를 던지지 않는다. `lead()` 와 `||` 는 두 방언에서
+    같으므로 그쪽으로 만든다.
+
+    길이가 모자란 자리는 `lead` 가 NULL 을 주고 `||` 가 NULL 을 전파하므로, 부르는 쪽이
+    `WHERE path IS NOT NULL` 로 걸러 낸다 — 두 방언 모두 NULL 연결은 NULL 이다.
+
+    **`WINDOW w AS (...)` 로 이름을 붙이지 않는다.** `UNION ALL` 갈래마다 같은 이름을 쓰면
+    DuckDB 가 `window "w" is already defined` 로 거부한다 — 명명 윈도의 스코프가 갈래별인지
+    쿼리 전체인지가 방언마다 다르다. 의미 테스트가 이걸 잡았고(문자열 테스트 9개는 전부
+    통과했다), 인라인 `OVER` 는 어느 방언에서도 모호하지 않다.
+    """
+    over = "OVER (PARTITION BY uuid, suid ORDER BY ts)"
+    parts = ["state"] + [f"lead(state, {i}) {over}" for i in range(1, n)]
+    return " || '>' || ".join(parts)
+
+
+def build_path_cube_sql(
+    events_table: str,
+    demography_table: str,
+    date: str,
+    window_dates: list[str],
+    services: list[str],
+    versions: list[str],
+    screens: list[str],
+    top_n: int = PATH_TOP_N,
+) -> str:
+    """세션이 밟은 화면 순서(n-gram). 7축 × n × 경로별 건수.
+
+    `top_n` 은 **테스트가 컷을 실제로 넘길 수 있게** 인자로 뺐다. 기본값이 200 이라
+    픽스처로는 도달할 수 없고, 그러면 컷과 `(other)` 행이 검증되지 않는 채 남는다.
+
+    **컷을 드러낸다.** 세그먼트×n 마다 상위 `PATH_TOP_N` 만 남기고 나머지를 `(other)` 한
+    행으로 접는다. 그 행이 있어야 총합이 보존되고 `cnt('(other)') / 전체` 가 곧 "상위 200이
+    놓친 비율" 이 된다. 조용히 버리면 소비자가 상위 200을 전수로 읽는다 — `dur_n`·`/other`
+    와 같은 부류의 결함이다.
+
+    `distinct_dropped` 를 따로 내는 이유는 **"200개가 꼬리 전부" 인지 "20만 개를 잘랐" 는지가
+    해석을 완전히 바꾸기** 때문이다. 커버리지 하나로는 그 둘이 구분되지 않는다.
+
+    순위의 tie-break 를 `path` 로 고정한다 — `ORDER BY cnt DESC` 만이면 200위와 201위가
+    실행마다 바뀌어 같은 입력에서 다른 큐브가 나온다(Louvain 에서 같은 종류의 결함을 밟았다).
+
+    n-gram 은 `lead()` 로 만든다(`_ngram_expr` 참고) — 배열 함수는 Trino 와 DuckDB 에서
+    세 번째 인자의 뜻이 달라 의미 테스트가 프로덕션과 다른 것을 검증하게 된다.
+    """
+    axes = CORE_AXIS_NAMES
+    axis_cols = "k." + ", k.".join(axes)
+    axis_names = ", ".join(axes)
+    screen_raw = (
+        "service_code || '/' || coalesce(nullif(trim(action_name), ''), '(none)')"
+    )
+    if screens:
+        screen_expr = (
+            f"CASE WHEN {screen_raw} IN ({_in_list(screens)})\n"
+            f"         THEN {screen_raw}\n"
+            "         ELSE service_code || '/other' END"
+        )
+    else:
+        screen_expr = "service_code || '/other'"
+    grams = "\n  UNION ALL\n".join(
+        "  SELECT uuid, suid, {n} AS n, {expr} AS path\n"
+        "  FROM seq".format(n=n, expr=_ngram_expr(n))
+        for n in PATH_LENGTHS
+    )
+    return (
+        _event_cte(events_table, demography_table, window_dates, services, versions)
+        + ",\nkept AS (\n"
+        "  SELECT\n    uuid,\n    suid,\n"
+        f"    {_first_event_axes(date)}\n"
+        + _first_event_attribution(date)
+        + "),\n"
+        "seq AS (\n"
+        f"  SELECT uuid, suid, ts, {screen_expr} AS state\n"
+        "  FROM ev\n"
+        "  WHERE action_type = 'Pageview'\n"
+        "),\n"
+        "grams AS (\n"
+        + grams
+        + "\n),\n"
+        # 길이가 n 보다 짧은 자리는 `lead` 가 NULL 이라 `||` 가 NULL 을 전파한다.
+        "counted AS (\n"
+        f"  SELECT {axis_cols}, g.n, g.path, count(*) AS cnt\n"
+        "  FROM grams g\n"
+        "  JOIN kept k ON k.uuid = g.uuid AND k.suid = g.suid\n"
+        "  WHERE g.path IS NOT NULL\n"
+        f"  GROUP BY {axis_cols}, g.n, g.path\n"
+        "),\n"
+        "ranked AS (\n"
+        f"  SELECT {axis_names}, n, path, cnt,\n"
+        f"    row_number() OVER (PARTITION BY {axis_names}, n\n"
+        "      ORDER BY cnt DESC, path) AS rnk\n"
+        "  FROM counted\n"
+        ")\n"
+        f"SELECT {axis_names}, n, path, cnt, 0 AS distinct_dropped\n"
+        "FROM ranked\n"
+        f"WHERE rnk <= {top_n}\n"
+        "UNION ALL\n"
+        f"SELECT {axis_names}, n, {_lit(OTHER_PATH)} AS path,\n"
+        "  sum(cnt) AS cnt, count(*) AS distinct_dropped\n"
+        "FROM ranked\n"
+        f"WHERE rnk > {top_n}\n"
+        f"GROUP BY {axis_names}, n\n"
+    )
