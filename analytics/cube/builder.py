@@ -17,6 +17,9 @@ import pandas as pd
 from analytics.cube.axes import CORE_AXIS_NAMES
 from analytics.cube.guard import assert_safe_sql
 from analytics.cube.sql import (
+    build_action_cube_sql,
+    build_cond_transition_cube_sql,
+    build_path_cube_sql,
     build_quality_cube_sql,
     build_session_cube_sql,
     build_transition_cube_sql,
@@ -195,6 +198,33 @@ def _transition_builder(
     )
 
 
+def _action_builder(*, state_dict, date, services, events_table, demography_table, **_):
+    return build_action_cube_sql(
+        events_table=events_table, demography_table=demography_table,
+        date=date, window_dates=_window_dates(date), services=services,
+        versions=state_dict.app_versions, screens=state_dict.screens,
+        layer1=state_dict.layer1, layer2=state_dict.layer2,
+    )
+
+
+def _cond_transition_builder(
+    *, state_dict, date, services, events_table, demography_table, **_
+):
+    return build_cond_transition_cube_sql(
+        events_table=events_table, demography_table=demography_table,
+        date=date, window_dates=_window_dates(date), services=services,
+        versions=state_dict.app_versions, screens=state_dict.screens,
+    )
+
+
+def _path_builder(*, state_dict, date, services, events_table, demography_table, **_):
+    return build_path_cube_sql(
+        events_table=events_table, demography_table=demography_table,
+        date=date, window_dates=_window_dates(date), services=services,
+        versions=state_dict.app_versions, screens=state_dict.screens,
+    )
+
+
 def _quality_builder(*, date, services, events_table, **_):
     # 세션 단위 검사가 자정을 넘긴 세션을 보려면 다른 큐브와 같은 창이 필요하다.
     return build_quality_cube_sql(
@@ -203,10 +233,15 @@ def _quality_builder(*, date, services, events_table, **_):
     )
 
 
+# **모두 `_window_dates` 를 공유한다.** 창이 갈리면 자정 넘긴 세션이 큐브마다 다르게
+# 잘리고, 큐브 간 조인이 조용히 어긋난다.
 DEFAULT_CUBE_BUILDERS = {
     "session": _session_builder,
     "transition": _transition_builder,
     "quality": _quality_builder,
+    "action": _action_builder,
+    "cond_transition": _cond_transition_builder,
+    "path": _path_builder,
 }
 
 

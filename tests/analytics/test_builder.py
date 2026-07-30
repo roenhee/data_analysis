@@ -35,6 +35,23 @@ class FakeQuery:
             return pd.DataFrame({"value": ["top/홈탭_진입"], "cnt": [70_000]})
         if "AS sessions" in sql:
             return pd.DataFrame({"period": ["2026-07-27"], "sessions": [10], "uv": [8]})
+        # **순서가 중요하다.** `cond_transition` 도 `from_state` 를 갖고 있어서 전이 큐브
+        # 분기가 앞에 오면 그쪽 결과를 받는다. 세 개를 각자만 가진 표식으로 먼저 가른다.
+        if "distinct_dropped" in sql:
+            return pd.DataFrame(
+                {"n": [3, 3], "path": ["a>b>c", "(other)"], "cnt": [7, 3],
+                 "distinct_dropped": [0, 12]}
+            )
+        if "c.action_kind" in sql:
+            return pd.DataFrame(
+                {"screen": ["top/홈탭_진입"], "action_kind": ["ClickContent"],
+                 "layer1": ["home_main"], "layer2": ["other"], "cnt": [9]}
+            )
+        if "p.action_kind" in sql:
+            return pd.DataFrame(
+                {"from_state": ["top/홈탭_진입"], "action_kind": ["ClickContent"],
+                 "to_state": ["EXIT"], "cnt": [4]}
+            )
         if "AS cnt" in sql and "from_state" in sql:
             return pd.DataFrame(
                 {"from_state": ["START"], "to_state": ["top/홈탭_진입"], "cnt": [5]}
@@ -76,9 +93,106 @@ def test_build_cubes_writes_one_file_per_cube_per_date(config):
         config, state_dict=_sd(), window=("2026-07-27", "2026-07-28"),
         services=["top"], source_version="sv1", query_fn=FakeQuery(),
     )
-    assert len(written) == 6  # 3 큐브 x 2 날짜
+    assert len(written) == 12  # 6 큐브 x 2 날짜
     for path in written:
         assert path.exists()
+
+
+def test_builds_six_cubes_per_date(config):
+    written = build_cubes(
+        config, state_dict=_sd(), window=("2026-07-27", "2026-07-27"),
+        services=["top"], source_version="sv1", query_fn=FakeQuery(),
+    )
+    assert len(written) == 6
+    assert {p.parent.parent.name for p in written} == {
+        "session", "transition", "quality", "action", "cond_transition", "path",
+    }
+
+
+def test_every_builder_reads_the_same_three_partition_window():
+    """창이 갈리면 자정 넘긴 세션이 큐브마다 다르게 잘려 큐브 간 조인이 조용히 어긋난다.
+
+    `D+1` 은 자정 넘긴 세션의 꼬리를, `D-1` 은 중복 집계 방지를 위한 것이므로 여섯 큐브가
+    모두 `[D-1, D, D+1]` 을 읽어야 한다. 하나만 `[D]` 로 좁혀도 예외는 나지 않는다.
+    """
+    from analytics.cube.builder import DEFAULT_CUBE_BUILDERS
+
+    expected = "date_id IN ('2026-07-26', '2026-07-27', '2026-07-28')"
+    for name, builder in DEFAULT_CUBE_BUILDERS.items():
+        sql = builder(
+            state_dict=_sd(), date="2026-07-27", services=["top"],
+            events_table=EVENTS_TABLE, demography_table=DEMOGRAPHY_TABLE,
+        )
+        assert expected in sql, name
+
+
+def test_every_screen_cube_receives_the_dictionary():
+    """사전을 안 넘기면 모든 화면이 `/other` 로 접히는데 예외는 나지 않는다.
+
+    화면을 쓰는 네 큐브(`transition`·`action`·`cond_transition`·`path`)가 같은 어휘를
+    받아야 서로 조인된다. 하나만 빈 목록을 받으면 그 큐브만 이름 없는 상태로 채워진다.
+    """
+    from analytics.cube.builder import DEFAULT_CUBE_BUILDERS
+
+    sd = _sd(screens=["top/홈탭_진입"])
+    for name in ("transition", "action", "cond_transition", "path"):
+        sql = DEFAULT_CUBE_BUILDERS[name](
+            state_dict=sd, date="2026-07-27", services=["top"],
+            events_table=EVENTS_TABLE, demography_table=DEMOGRAPHY_TABLE,
+        )
+        assert "'top/홈탭_진입'" in sql, name
+
+
+def test_the_action_cube_receives_both_layer_dictionaries():
+    """`layer1`·`layer2` 를 안 넘기면 슬롯 좌표가 전부 `other` 가 된다."""
+    from analytics.cube.builder import DEFAULT_CUBE_BUILDERS
+
+    sd = _sd(layer1=["home_main"], layer2=["home_main>SEARCH"])
+    sql = DEFAULT_CUBE_BUILDERS["action"](
+        state_dict=sd, date="2026-07-27", services=["top"],
+        events_table=EVENTS_TABLE, demography_table=DEMOGRAPHY_TABLE,
+    )
+    assert "'home_main'" in sql
+    assert "'home_main>SEARCH'" in sql
+
+
+def test_every_builder_shares_the_first_event_attribution():
+    """귀속이 갈라지면 같은 세션이 큐브마다 다른 날짜·축 버킷에 앉는다."""
+    from analytics.cube.builder import DEFAULT_CUBE_BUILDERS
+    from analytics.cube.sql import _first_event_attribution
+
+    clause = _first_event_attribution("2026-07-27")
+    for name, builder in DEFAULT_CUBE_BUILDERS.items():
+        sql = builder(
+            state_dict=_sd(), date="2026-07-27", services=["top"],
+            events_table=EVENTS_TABLE, demography_table=DEMOGRAPHY_TABLE,
+        )
+        if name == "quality":
+            continue  # 품질 큐브는 세션 검사마다 자체 집계를 쓴다
+        assert clause in sql, name
+
+
+def test_adding_the_new_cubes_does_not_rebuild_the_old_ones(config):
+    """새 큐브를 붙여도 기존 세 큐브는 캐시 적중이어야 한다.
+
+    `sql_hash` 가 **큐브별**이라 성립한다(`cube_key_parts`). 안 그러면 15일 백필을 다시
+    돌려야 하고, 사전 버전이 같아도 좌표가 흔들린다.
+    """
+    from analytics.cube.builder import DEFAULT_CUBE_BUILDERS
+
+    old = ("session", "transition", "quality")
+    kw = dict(config=config, state_dict=_sd(), window=("2026-07-27", "2026-07-27"),
+              services=["top"], source_version="sv1")
+    first = build_cubes(**kw, query_fn=FakeQuery(),
+                        cube_builders={k: DEFAULT_CUBE_BUILDERS[k] for k in old})
+    assert len(first) == 3
+    before = {p: p.stat().st_mtime_ns for p in first}
+
+    second = FakeQuery()
+    written = build_cubes(**kw, query_fn=second)
+    assert len(written) == 3, "새 큐브 셋만 만들어져야 한다"
+    for path, mtime in before.items():
+        assert path.stat().st_mtime_ns == mtime, f"{path} 가 다시 만들어졌다"
 
 
 def test_build_cubes_skips_dates_already_built(config):
@@ -98,7 +212,7 @@ def test_build_cubes_refresh_rebuilds(config):
               services=["top"], source_version="sv1")
     build_cubes(**kw, query_fn=FakeQuery())
     written = build_cubes(**kw, query_fn=FakeQuery(), refresh=True)
-    assert len(written) == 3
+    assert len(written) == 6
 
 
 def test_build_cubes_rejects_unpruned_sql(config):
@@ -246,6 +360,6 @@ def test_a_failing_date_leaves_earlier_dates_committed(config):
         config, state_dict=_sd(), window=("2026-07-27", "2026-07-28"),
         services=["top"], source_version="sv1", query_fn=FakeQuery(),
     )
-    # 27일치 3개는 이미 있으므로 28일치 3개만 새로 쓴다.
-    assert len(resumed) == 3
+    # 27일치 6개는 이미 있으므로 28일치 6개만 새로 쓴다.
+    assert len(resumed) == 6
     assert all("date=2026-07-28" in p.name for p in resumed)
