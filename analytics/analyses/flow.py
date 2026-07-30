@@ -27,6 +27,7 @@ from analytics.metrics.markov import (
     stationary_distribution,
     transition_matrix,
 )
+from analytics.metrics.services import services_of
 
 
 def _thin_cell_warning(edges: pd.DataFrame) -> list[dict]:
@@ -218,4 +219,64 @@ def screen_pair_affinity(cubes: CubeSet, **_) -> AnalysisResult:
         # 행별 조인이 여러 `to_state` 를 한 행으로 뭉갠다.
         envelope=envelope_for(cubes, {}, _thin_cell_warning(edges)),
         viz={"kind": "heatmap", "x": "from_state"},
+    )
+
+
+@analysis("cross_service_flow")
+def cross_service_flow(cubes: CubeSet, **_) -> AnalysisResult:
+    """서비스 사이의 이동. **화면 간 전이의 절반이 여기 있다.**
+
+    실측 15일에서 화면 간 전이 35.4억 건 중 49.68%가 서비스를 건너뛴다. 그게 이 앱의
+    실제 사용 행태인데(세션 44.7%가 여러 서비스에 걸친다) 어느 분석도 보여주지 않았다 —
+    `screen_flow` 는 화면 단위라 서비스가 안 보이고, `per_service` 는 이 전이를 **버린다.**
+
+    `START`·`EXIT` 는 뺀다. 세션 경계는 서비스 간 이동이 아니고, 넣으면 분모가 세션
+    수만큼 부푼다. `screen_pair_affinity` 가 둘을 넣는 것과 반대인데, 거기서는
+    "어느 화면이 세션을 시작하는가" 가 답할 질문이었고 여기서는 아니다.
+
+    `switch_entropy` 는 **건너뛰는 이동에 한정한** 목적지 분포의 엔트로피(nats)다.
+    0 이면 모든 이동이 한 쌍으로만 가고, 크면 여러 방향으로 흩어진다. `cross_service_share`
+    가 "얼마나 넘나드나" 이고 이쪽이 "어디로 넘나드나" 다.
+
+    커버리지는 비운다 — 카운트만 쓴다.
+    """
+    edges = cubes.transition
+    if edges is None:
+        raise ValueError("cross_service_flow needs the transition cube; it is absent")
+    frame = pd.DataFrame({
+        "from_service": services_of(edges["from_state"]),
+        "to_service": services_of(edges["to_state"]),
+        "cnt": edges["cnt"],
+    })
+    frame = frame[frame["from_service"].notna() & frame["to_service"].notna()]
+    if frame.empty or float(frame["cnt"].sum()) <= 0:
+        raise ValueError(
+            "no screen-to-screen transitions: every edge touches START or EXIT, so "
+            "there is no service movement to report"
+        )
+
+    grouped = frame.groupby(["from_service", "to_service"], as_index=False)["cnt"].sum()
+    origin = grouped.groupby("from_service")["cnt"].transform("sum")
+    grouped["share_of_origin"] = grouped["cnt"] / origin
+    grouped = grouped.sort_values("cnt", ascending=False, ignore_index=True)
+
+    total = float(grouped["cnt"].sum())
+    switches = grouped[grouped["from_service"] != grouped["to_service"]]
+    switch_total = float(switches["cnt"].sum())
+    if switch_total > 0:
+        p = switches["cnt"].to_numpy(dtype=float) / switch_total
+        entropy = float(-(p * np.log(p)).sum())
+    else:
+        # 건너뛰는 이동이 없다 = "없다" 이고 "모른다" 가 아니다. NaN 으로 내면 소비자가
+        # 계측 실패와 구분할 수 없다.
+        entropy = 0.0
+
+    return AnalysisResult(
+        frame=grouped,
+        headline={
+            "cross_service_share": switch_total / total,
+            "switch_entropy": entropy,
+        },
+        envelope=envelope_for(cubes, {}, _thin_cell_warning(edges)),
+        viz={"kind": "heatmap", "x": "from_service"},
     )
