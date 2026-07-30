@@ -470,3 +470,113 @@ def build_quality_cube_sql(
         "       'exit_without_appexit', exit_without_appexit, total"
         " FROM exit_checks\n"
     )
+
+
+def _fold(expr: str, allowed: list[str]) -> str:
+    """사전에 없는 값을 `'other'` 로 접는다. 화면의 `/other` 와 같은 규약이다.
+
+    화면과 달리 서비스 접두어가 없다 — `layer1`·`layer2` 사전이 서비스 구분 없이
+    만들어져 있어서다(`state_sql.py`). 팀 간 이름이 섞일 수 있고, 실측에서 `search` 만
+    `layer1` 값이 195개인데 사전은 45개다. Task 8 에서 서비스별 `other` 비중을 잰다.
+    """
+    if not allowed:
+        return "'other'"
+    return f"CASE WHEN {expr} IN ({_in_list(allowed)}) THEN {expr} ELSE 'other' END"
+
+
+def build_action_cube_sql(
+    events_table: str,
+    demography_table: str,
+    date: str,
+    window_dates: list[str],
+    services: list[str],
+    versions: list[str],
+    screens: list[str],
+    layer1: list[str],
+    layer2: list[str],
+) -> str:
+    """화면 안의 행동 분포. 7축 × 화면 × (kind, layer1, layer2) 별 건수.
+
+    **화면 식은 `build_transition_cube_sql` 과 같다.** 그래야 두 큐브를 조인해 "홈탭에서
+    무엇을 눌렀고 그다음 어디로 갔나" 를 한 문장으로 물을 수 있다. `common.page` 로
+    귀속하면 윈도우 함수가 필요 없어 싸지만 대응이 깨진다 — 실측에서 `page → action.name`
+    이 물량 79~99.5%에서 다중 대응이고 `top/default` 하나가 top 트래픽의 57%인데 그 안에
+    이름이 10개다(`docs/superpowers/measurements/2026-07-30-screen-namespace.md`).
+
+    **클릭은 슬롯 좌표(`layer1`)가 있는 행이다.** `action_type NOT IN ('Pageview','Usage')`
+    는 하루 31.2억 행을 잡는데 그중 사용자 상호작용은 5.5%(1.71억)뿐이고 34%가 광고
+    텔레메트리다(`2026-07-30-click-stream-shape.md`). 보유율이 `action.name` 별로 0% 아니면
+    100%로 깨끗하게 갈리는 것이 이 기준의 근거다. `action.kind` 목록으로 고르면 kind 가 없는
+    `다음검색>클릭` 1,722만 건을 놓치거나 `axzad_request` 4.8억 건을 클릭으로 센다.
+
+    클릭은 `visit_idx` 로 **직전 Pageview** 에 붙인다 — 1단계 체류 귀속에서 이미 검증된
+    기법이다. 첫 화면보다 앞선 클릭은 `START` 에 붙인다(전이 큐브의 표기 그대로) —
+    조용히 버리면 분포의 분모가 줄어든다.
+
+    롤업 행을 만들지 않는다 — `cnt` 는 가산이라 소비자가 합칠 수 있고, `GROUPING SETS` 는
+    비가산인 `uv` 때문에 세션 큐브에만 필요하다.
+    """
+    axes = CORE_AXIS_NAMES
+    axis_cols = "k." + ", k.".join(axes)
+    screen_raw = (
+        "service_code || '/' || coalesce(nullif(trim(action_name), ''), '(none)')"
+    )
+    if screens:
+        screen_expr = (
+            f"CASE WHEN {screen_raw} IN ({_in_list(screens)})\n"
+            f"              THEN {screen_raw}\n"
+            "              ELSE service_code || '/other' END"
+        )
+    else:
+        screen_expr = "service_code || '/other'"
+    l1_raw = "trim(layer1)"
+    l2_raw = f"{l1_raw} || '>' || coalesce(nullif(trim(layer2), ''), '(none)')"
+    return (
+        _event_cte(events_table, demography_table, window_dates, services, versions)
+        + ",\nkept AS (\n"
+        "  SELECT\n    uuid,\n    suid,\n"
+        f"    {_first_event_axes(date)}\n"
+        + _first_event_attribution(date)
+        + "),\n"
+        # 화면 신호(Pageview)와 클릭 신호(슬롯 좌표가 있는 행)를 한 스트림에 넣는다.
+        "stream AS (\n"
+        "  SELECT uuid, suid, ts, action_kind, layer1, layer2,\n"
+        f"    CASE WHEN action_type = 'Pageview' THEN {screen_expr} END AS state,\n"
+        "    CASE WHEN action_type = 'Pageview' THEN 1 ELSE 0 END AS is_screen\n"
+        "  FROM ev\n"
+        "  WHERE action_type = 'Pageview'\n"
+        "     OR nullif(trim(layer1), '') IS NOT NULL\n"
+        "),\n"
+        # 각 행을 직전 화면 방문에 묶는다. 같은 ts 면 Pageview 가 먼저 와야 그 방문에
+        # 붙는다 — 안 그러면 클릭이 앞 방문으로 새어 간다. `ROWS` 프레임이라 ts 가 같은
+        # Pageview 둘도 서로 다른 방문 번호를 받는다(`RANGE` 면 한 방문이 된다).
+        "marked AS (\n"
+        "  SELECT uuid, suid, state, is_screen, action_kind, layer1, layer2,\n"
+        "    sum(is_screen) OVER (PARTITION BY uuid, suid ORDER BY ts, is_screen DESC\n"
+        "      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS visit_idx\n"
+        "  FROM stream\n"
+        "),\n"
+        "visits AS (\n"
+        "  SELECT uuid, suid, visit_idx, state FROM marked WHERE is_screen = 1\n"
+        "),\n"
+        # `visit_idx = 0` 은 첫 Pageview 보다 앞선 클릭이라 붙일 방문이 없다.
+        # LEFT JOIN 이 NULL 을 주고 `START` 로 채운다 — 버리면 분모가 줄어든다.
+        "clicks AS (\n"
+        "  SELECT m.uuid, m.suid,\n"
+        "    coalesce(v.state, 'START') AS screen,\n"
+        "    coalesce(nullif(trim(m.action_kind), ''), '(none)') AS action_kind,\n"
+        f"    {_fold(l1_raw, layer1)} AS layer1,\n"
+        f"    {_fold(l2_raw, layer2)} AS layer2\n"
+        "  FROM marked m\n"
+        "  LEFT JOIN visits v\n"
+        "    ON v.uuid = m.uuid AND v.suid = m.suid AND v.visit_idx = m.visit_idx\n"
+        "  WHERE m.is_screen = 0\n"
+        ")\n"
+        "SELECT\n"
+        f"  {axis_cols},\n"
+        "  c.screen,\n  c.action_kind,\n  c.layer1,\n  c.layer2,\n"
+        "  count(*) AS cnt\n"
+        "FROM clicks c\n"
+        "JOIN kept k ON k.uuid = c.uuid AND k.suid = c.suid\n"
+        f"GROUP BY {axis_cols}, c.screen, c.action_kind, c.layer1, c.layer2\n"
+    )
