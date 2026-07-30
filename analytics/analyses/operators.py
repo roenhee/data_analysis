@@ -14,7 +14,7 @@ from analytics.analyses.base import AnalysisResult, CubeSet, get_analysis
 from analytics.metrics.compare import comparable_dates, weight_skew
 from analytics.metrics.descriptive import SESSION_AXES
 from analytics.metrics.frame import full_combination_rows
-from analytics.metrics.services import NON_SCREEN_STATES, services_of
+from analytics.metrics.services import NON_SCREEN_STATES, other_share, services_of
 
 
 @dataclass(frozen=True)
@@ -302,11 +302,15 @@ def per_service(cubes: CubeSet, analysis_name: str, **params) -> ServiceBreakdow
     crossing = float(counts[both & (from_svc != to_svc)].sum())
 
     pooled = fn(cubes, **params).headline
+    # 지표 옆에 사전 커버리지를 함께 싣는다 — `/other` 가 큰 서비스의 값은 접힌 상태
+    # 때문에 치우쳐 있고, 열이 떨어져 있으면 소비자가 짝지어 읽지 않는다.
+    lumped = other_share(edges)
     rows = []
     for service in sorted(by_service.index):
         volume = float(by_service[service])
         row = {"service": service, "cnt": volume,
-               "share": volume / origin_total if origin_total else float("nan")}
+               "share": volume / origin_total if origin_total else float("nan"),
+               "other_share": lumped.get(service, 0.0)}
         try:
             row.update(
                 fn(_service_slice(cubes, service, from_svc, to_svc),

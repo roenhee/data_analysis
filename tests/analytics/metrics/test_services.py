@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from analytics.metrics.services import service_mix, service_of
+from analytics.metrics.services import other_share, service_mix, service_of
 
 
 def test_the_prefix_is_the_service():
@@ -59,3 +59,42 @@ def test_an_empty_frame_gives_an_empty_mix_rather_than_raising():
 
 def test_a_frame_without_the_columns_gives_an_empty_mix():
     assert service_mix(pd.DataFrame({"period": ["2026-07-27"]})) == {}
+
+
+def _lumped() -> pd.DataFrame:
+    """top 은 이름 있는 화면이 대부분, sports 는 `/other` 가 더 크다."""
+    return pd.DataFrame([
+        {"from_state": "top/엠탑조회", "to_state": "top/홈탭_진입", "cnt": 900},
+        {"from_state": "top/other", "to_state": "top/엠탑조회", "cnt": 100},
+        {"from_state": "sports/m_newsview_보기", "to_state": "EXIT", "cnt": 300},
+        {"from_state": "sports/other", "to_state": "sports/m_newsview_보기",
+         "cnt": 700},
+        {"from_state": "START", "to_state": "top/엠탑조회", "cnt": 5000},
+    ])
+
+
+def test_the_other_share_is_measured_within_each_service():
+    """서비스마다 사전 커버리지가 다르다 — 전체 한 숫자로는 그게 안 보인다."""
+    assert other_share(_lumped()) == {"top": pytest.approx(0.1),
+                                      "sports": pytest.approx(0.7)}
+
+
+def test_a_service_with_no_other_bucket_reports_zero_not_missing():
+    """`/other` 가 없는 것은 "이름이 다 붙었다" 는 사실이다. 키가 빠지면 모른다는 뜻이 된다."""
+    edges = pd.DataFrame([
+        {"from_state": "search/검색결과화면_조회", "to_state": "EXIT", "cnt": 500},
+    ])
+    assert other_share(edges) == {"search": 0.0}
+
+
+def test_start_is_not_counted_in_the_other_share_denominator():
+    """분모는 그 서비스가 화면에서 출발한 전이다 — `service_mix` 와 같은 규약."""
+    with_start = _lumped()
+    more_start = pd.concat([with_start, pd.DataFrame([
+        {"from_state": "START", "to_state": "sports/other", "cnt": 90_000},
+    ])], ignore_index=True)
+    assert other_share(more_start) == other_share(with_start)
+
+
+def test_an_empty_frame_gives_an_empty_other_share():
+    assert other_share(pd.DataFrame(columns=["from_state", "cnt"])) == {}

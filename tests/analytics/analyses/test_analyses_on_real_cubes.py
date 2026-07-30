@@ -207,12 +207,20 @@ def test_quality_warnings_are_backed_by_volume_not_the_long_tail(real_results):
     """
     import json
 
+    from analytics.cube.sql import QUALITY_CHECKS
+
     warnings = real_results["quality_report"].envelope["warnings"]
     assert len(warnings) < 100, f"{len(warnings)}건 — 집계 수준이 잘못됐다"
     assert len(json.dumps(warnings)) < 100_000
-    assert all({"period", "ratio", "total"} <= set(w) for w in warnings)
+
+    # 봉투의 경고 목록은 **모양이 섞여 있다.** 분석이 낸 것 말고도 `envelope_for` 가
+    # 자동으로 붙이는 것들이 있다(`screens_lumped_into_other`). 여기서 고정하려는 것은
+    # 품질 검사 경고의 모양이므로 그 이름들로 좁힌다.
+    checks = [w for w in warnings if w["check_name"] in QUALITY_CHECKS]
+    assert checks, "품질 검사 경고가 하나는 있어야 한다"
+    assert all({"period", "ratio", "total"} <= set(w) for w in checks)
     # 롱테일의 100% 가 사라졌다는 뜻: 비율 1.0 짜리는 전부 대형이다.
-    assert not [w for w in warnings if w["ratio"] >= 1.0 and w["total"] < 1000]
+    assert not [w for w in checks if w["ratio"] >= 1.0 and w["total"] < 1000]
 
 
 @needs_cubes
@@ -265,6 +273,32 @@ def test_the_pooled_flow_headline_sits_outside_every_service(real_cubes):
     exit_lo, _ = got.outside_range["mean_exit_prob"]
     assert got.pooled["mean_exit_prob"] < exit_lo
     assert 0.45 < got.cross_service_share < 0.55
+
+
+@needs_cubes
+def test_the_dictionary_starves_the_small_services(real_results):
+    """마르코프 노트북이 재던 `OTHER` 누출. 파이프라인이 잃었다가 되살렸다.
+
+    사전 채택 컷이 **전체 물량** 누적 95%라 top 이 물량의 56%를 차지하면서 작은 서비스가
+    먼저 잘린다. 전체로는 4.71%인데 서비스별로는 sports **36.97%** · entertain
+    **18.67%** · top 3.05% · media 0.52% · content_v 0.003% · search 0% 다.
+
+    `/other` 는 드문 화면이 아니라 138개 이름을 접은 가짜 화면이다. 상태를 합치는 것은
+    합쳐진 화면들의 나가는 분포가 같을 때만 무손실이므로, sports 의 기대 화면 수 5.32 는
+    상태 둘 중 하나가 그 버킷인 체인의 값이다. **전체 한 숫자로는 그게 안 보인다.**
+    """
+    got = real_results["screen_flow"]
+    shares = got.envelope["other_share"]
+    assert shares["sports"] > 0.30 and shares["entertain"] > 0.15
+    assert shares["media"] < 0.02 and shares["search"] == pytest.approx(0.0)
+    assert 0.04 < sum(
+        shares[s] * got.envelope["service_mix"][s] for s in shares
+    ) < 0.06, "전체 비중은 95% 컷이 약속한 5% 근처여야 한다"
+
+    # 상시 표시다 — 임계치가 나쁜 무리 최솟값 아래라 그 둘만 매일 걸린다.
+    fired = {w["service_code"] for w in got.envelope["warnings"]
+             if w["check_name"] == "screens_lumped_into_other"}
+    assert fired == {"sports", "entertain"}
 
 
 @needs_cubes
@@ -440,9 +474,10 @@ def test_a_version_slice_reports_uv_as_unavailable_on_real_cubes(real_cubes):
     )
     assert got.frame["uv"].isna().all()
     assert got.frame["sessions_per_user"].isna().all()
-    assert [w["check_name"] for w in got.envelope["warnings"]] == [
-        "uv_unavailable_for_this_slice"
-    ]
+    names = [w["check_name"] for w in got.envelope["warnings"]]
+    assert "uv_unavailable_for_this_slice" in names
+    # 이 슬라이스도 사전 커버리지가 나쁜 서비스를 물고 있다 — 봉투가 둘 다 말한다.
+    assert "screens_lumped_into_other" in names
     # 가산 측정값은 그대로 나온다 — 슬라이스라고 분석이 죽지 않는다.
     assert got.headline["sessions"] > 1_000_000
     assert 100 < got.headline["seconds_per_session"] < 600

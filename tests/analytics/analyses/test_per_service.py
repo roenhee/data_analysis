@@ -60,6 +60,24 @@ def test_each_headline_key_becomes_a_column():
     assert "mean_exit_prob" in got.frame.columns
 
 
+def test_the_frame_carries_the_other_share_next_to_the_metrics():
+    """그 서비스의 값을 얼마나 믿을 수 있는지가 같은 줄에 있어야 한다.
+
+    `/other` 는 여러 화면을 접은 가짜 화면이라, 비중이 크면 그 서비스의 기대 화면 수가
+    치우친다. 표에서 두 열이 떨어져 있으면 소비자가 짝지어 읽지 않는다.
+    """
+    edges = pd.concat([_cubes().transition, pd.DataFrame([
+        _edge("top/other", "top/a", 200),
+    ])], ignore_index=True)
+    lumped = CubeSet(session=None, transition=edges, quality=None,
+                     state_dict_version="sd_abc", services=["top", "media"],
+                     requested_dates=["2026-07-27"], present_dates=["2026-07-27"])
+    per = per_service(lumped, "screen_flow").frame.set_index("service")
+    # top 은 화면 출발 1000(800 + other 200) 중 200 이 `/other` 다
+    assert per.loc["top", "other_share"] == pytest.approx(0.2)
+    assert per.loc["media", "other_share"] == pytest.approx(0.0)
+
+
 def test_the_slice_keeps_only_transitions_with_both_ends_in_the_service():
     """출발만 보고 자르면 다른 서비스 화면이 그 체인에 남아 값이 달라진다.
 

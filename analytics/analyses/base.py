@@ -13,7 +13,7 @@ from typing import Callable
 
 import pandas as pd
 
-from analytics.metrics.services import service_mix
+from analytics.metrics.services import other_share, service_mix
 from data_layer.config import Config
 from data_layer.results import publish_result, result_id
 
@@ -99,6 +99,36 @@ class AnalysisResult:
     params: dict = field(default_factory=dict)
 
 
+# `/other` 비중이 이 값을 넘는 서비스를 경고한다. **상시 표시용**이다.
+#
+# 임계치 규칙(`quality_thresholds.json` 과 같은 규칙): 관측 최댓값 위(드리프트 탐지기)
+# 아니면 **나쁜 무리 최솟값 아래**(상시 표시), 그 사이는 안 된다. 사이에 두면 정상 변동의
+# 상위 몇 개만 걸려 감시되고 있다는 잘못된 안심을 준다.
+#
+# 실측 15일 무리: search 0% · content_v 0.003% · media 0.52% · top 3.05% ·
+# **entertain 18.67% · sports 36.97%**. 나쁜 쪽 최솟값이 18.67% 라 0.15 는 그 아래다 —
+# 두 서비스가 매일 걸리고 나머지 넷은 안 걸린다.
+OTHER_WARN_ABOVE = 0.15
+
+
+def _lumped_warnings(cubes: CubeSet) -> list[dict]:
+    """`/other` 가 큰 서비스를 경고한다. **막지 않고 알린다.**
+
+    `/other` 는 드문 화면이 아니라 여러 화면을 접은 가짜 화면이다. 마르코프 체인에서
+    상태를 합치는 것은 합쳐진 화면들의 나가는 분포가 같을 때만 무손실이므로, 이 비중이
+    크면 그 서비스의 기대 화면 수·정상분포가 치우친다. 전체로는 4.71%라 작아 보이는데
+    sports 는 36.97% 다 — **전체 한 숫자로는 그게 안 보인다.**
+    """
+    if cubes.transition is None:
+        return []
+    return [
+        {"check_name": "screens_lumped_into_other", "service_code": service,
+         "ratio": ratio, "threshold": OTHER_WARN_ABOVE}
+        for service, ratio in sorted(other_share(cubes.transition).items())
+        if ratio > OTHER_WARN_ABOVE
+    ]
+
+
 def _mix_of(cubes: CubeSet) -> dict[str, float]:
     """합산 지표의 서비스 구성. 알 수 없으면 빈 dict — 0 으로 채우지 않는다.
 
@@ -139,7 +169,13 @@ def envelope_for(
         # 합산 지표가 어느 서비스에 붙어 있는지. 실측 15일 top 61.8% 대 content_v 2.1% 이고,
         # 이게 없으면 `mean_expected_steps` 10.62 가 "앱 전체" 로 읽힌다(서비스별 2.77~8.08).
         "service_mix": _mix_of(cubes),
-        "warnings": list(warnings or []),
+        # 서비스별 사전 커버리지. 전체 4.71% 뒤에 sports 36.97% 가 숨어 있어서 서비스별로
+        # 낸다. 전이 큐브가 없으면 알 수 없으므로 빈 dict 이고 0 으로 채우지 않는다.
+        "other_share": (
+            other_share(cubes.transition) if cubes.transition is not None else {}
+        ),
+        # 분석이 낸 경고 뒤에 덧붙인다 — 덮어쓰면 분석의 경고가 사라진다.
+        "warnings": list(warnings or []) + _lumped_warnings(cubes),
     }
 
 

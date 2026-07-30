@@ -187,6 +187,7 @@ b.frame                 # 서비스별 headline + 물량·비중
 b.pooled                # 합산 headline
 b.outside_range         # 합산이 서비스별 범위 밖인 headline 키 -> {키: (최소, 최대)}
 b.cross_service_share   # 서비스별로 자를 때 사라진 전이 비중 (실측 0.4968)
+b.frame["other_share"]  # 그 서비스의 `/other` 비중 — 지표 옆에서 함께 읽는다
 
 publish(config, flow, run_id="r1", analysis_type="screen_flow", title="MA 화면 흐름")
 ```
@@ -287,6 +288,19 @@ publish(config, flow, run_id="r1", analysis_type="screen_flow", title="MA 화면
   표시한다. 서비스 간 이동 자체는 `cross_service_flow` 로 본다.
   - 무조건 울리는 경보가 아니다: `screen_dwell_rank` 의 방문당 체류는 물량 가중 평균이라
     항상 범위 안이고(합산 48.42, 서비스별 35.69~73.29) `outside_range` 가 빈다.
+- **Treating `/other` as "rare screens".** 아니다 — **138개 이름을 접은 가짜 화면**이다.
+  사전 채택 컷이 전체 물량 누적 95%(`state_dict.py`)라 전체로는 4.71%지만 서비스별로는
+  sports **36.97%** · entertain **18.67%** · top 3.05% · media 0.52% · content_v 0.003% ·
+  search 0% 다. top 이 물량의 56%라 top 의 이름이 상위 95%를 채우고 작은 서비스가 먼저 잘린다.
+  - 마르코프 체인에서 상태를 합치는 것은 **합쳐진 화면들의 나가는 분포가 같을 때만** 무손실
+    이다. 다르면 합친 체인은 마르코프가 아니고 기대 화면 수·정상분포가 치우치는데, 크기가
+    접힌 상태의 물량에 비례한다. **sports 는 화면 상태가 둘인데 하나가 이 버킷이다** —
+    그 서비스의 5.32 는 그런 체인의 값이다.
+  - 봉투의 `other_share` 가 서비스별 값을 싣고, 15% 를 넘으면
+    `screens_lumped_into_other` 경고가 **매일** 붙는다(실측 sports·entertain 둘만).
+    `per_service` 는 지표 옆 열로 함께 낸다.
+  - 품질 큐브의 `screen_other_ratio` 로는 이걸 볼 수 없다 — state 사전을 모르는 쿼리라
+    NULL 이름만 세는 하한이고 실측 0.0000 이다.
 - Comparing the same screen name across services. `m_newsview_보기` 를 media·entertain·
   sports **세 팀이 쓴다.** 서비스 접두어로 분리돼 있지만 계측 방식이 다르다 — 이름 하나가
   여러 페이지를 가리키는 비율이 sports 28.7%, entertain 0.01% 다.
