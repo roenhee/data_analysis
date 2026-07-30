@@ -61,8 +61,13 @@ def _event_cte(
     )
 
 
-def _first_event_axes(date: str, indent: str = "    ") -> str:
+def _first_event_axes(
+    date: str, indent: str = "    ", axes: tuple[str, ...] = CORE_AXIS_NAMES
+) -> str:
     """세션의 축 값을 첫 이벤트로 고정하는 SELECT 절. 세션이 축에서 쪼개지지 않게 한다.
+
+    `axes` 를 줄이면 그만큼만 낸다 — `cond_transition` 은 4축이다. 줄여도 **귀속 자체는
+    같다**(`_first_event_attribution`), 그래야 같은 세션이 큐브마다 같은 날짜에 앉는다.
 
     **`period` 만 예외로 빌드 날짜 상수다.** 나머지 축처럼 `min_by(period, ts)` 로 두면
     `period` 가 첫 이벤트의 `date_id`(그 이벤트가 **쓰인 파티션**)가 되는데, 귀속은
@@ -75,7 +80,7 @@ def _first_event_axes(date: str, indent: str = "    ") -> str:
     된다. 귀속이 `date(min(ts)) = date` 를 보장하므로 `period` 는 상수여야 맞다.
     """
     parts = []
-    for axis in CORE_AXIS_NAMES:
+    for axis in axes:
         if axis == "period":
             parts.append(f"{_lit(date)} AS period")
         else:
@@ -579,4 +584,118 @@ def build_action_cube_sql(
         "FROM clicks c\n"
         "JOIN kept k ON k.uuid = c.uuid AND k.suid = c.suid\n"
         f"GROUP BY {axis_cols}, c.screen, c.action_kind, c.layer1, c.layer2\n"
+    )
+
+
+# `cond_transition` 큐브의 축. **7축이 아니다** — 전이쌍 3,604 × kind 8 이면 하루 최대
+# 171만 행이 되어 코어 큐브보다 무거워진다. 성별·연령·시간대까지 쪼개 볼 필요가 낮다는
+# 판단이고, 필요해지면 그때 축을 늘린다(사전 버전이 아니라 `sql_hash` 가 바뀐다).
+COND_AXIS_NAMES = ("period", "service_type", "os", "app_version")
+
+# 클릭이 **하나도 없이** 넘어간 전이. `'(none)'`(클릭은 있는데 `action.kind` 가 없음)과
+# **다른 것이다** — 실측 클릭 집합의 절반이 kind 가 없어서, 같은 라벨에 넣으면 "행동 없이
+# 넘어갔다" 와 "무슨 행동인지 모른다" 가 큰 덩어리로 뭉개진다.
+NO_CLICK = "(no_click)"
+
+
+def build_cond_transition_cube_sql(
+    events_table: str,
+    demography_table: str,
+    date: str,
+    window_dates: list[str],
+    services: list[str],
+    versions: list[str],
+    screens: list[str],
+) -> str:
+    """어떤 행동이 다음 화면을 결정하는가. 4축 × (from_state, action_kind, to_state).
+
+    **`cnt` 는 전이 수가 아니다.** 한 방문에서 클릭이 k번 있으면 그 전이가 k행으로 나온다.
+    분모가 무엇인지 늘 명시해야 한다 — "화면 X 에서 종류 K 의 클릭 중 다음이 Y 인 비율" 은
+    맞고, "화면 X 의 전이 중" 으로 읽으면 틀린다.
+
+    클릭이 하나도 없는 전이는 `(no_click)` 으로 **반드시 낸다.** 빼면 "행동이 다음 화면을
+    결정한다" 는 결론이 행동 있는 전이만 본 결과가 된다.
+
+    화면 식·클릭 필터·`visit_idx` 귀속은 `build_action_cube_sql` 과 같다. 갈리면 두 큐브의
+    `cnt` 합이 서로 안 맞고, 그 불일치를 "다중 행동" 으로 오해한다.
+
+    **첫 화면 이전 클릭은 `START -> 첫화면` 엣지에 붙는다.** 전이 큐브가 이미 그 엣지를
+    갖고 있어서 새 표기를 발명하지 않고 총합이 보존된다.
+    """
+    axes = COND_AXIS_NAMES
+    axis_cols = "k." + ", k.".join(axes)
+    screen_raw = (
+        "service_code || '/' || coalesce(nullif(trim(action_name), ''), '(none)')"
+    )
+    if screens:
+        screen_expr = (
+            f"CASE WHEN {screen_raw} IN ({_in_list(screens)})\n"
+            f"              THEN {screen_raw}\n"
+            "              ELSE service_code || '/other' END"
+        )
+    else:
+        screen_expr = "service_code || '/other'"
+    return (
+        _event_cte(events_table, demography_table, window_dates, services, versions)
+        + ",\nkept AS (\n"
+        "  SELECT\n    uuid,\n    suid,\n"
+        f"    {_first_event_axes(date, axes=axes)}\n"
+        + _first_event_attribution(date)
+        + "),\n"
+        # `build_action_cube_sql` 과 **같은** stream/marked 다. 복제인 것이 의도다 —
+        # 두 큐브가 같은 클릭 집합과 같은 방문 번호를 봐야 `cnt` 가 서로 대조된다.
+        "stream AS (\n"
+        "  SELECT uuid, suid, ts, action_kind, layer1,\n"
+        f"    CASE WHEN action_type = 'Pageview' THEN {screen_expr} END AS state,\n"
+        "    CASE WHEN action_type = 'Pageview' THEN 1 ELSE 0 END AS is_screen\n"
+        "  FROM ev\n"
+        "  WHERE action_type = 'Pageview'\n"
+        "     OR nullif(trim(layer1), '') IS NOT NULL\n"
+        "),\n"
+        "marked AS (\n"
+        "  SELECT uuid, suid, state, is_screen, action_kind,\n"
+        "    sum(is_screen) OVER (PARTITION BY uuid, suid ORDER BY ts, is_screen DESC\n"
+        "      ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS visit_idx\n"
+        "  FROM stream\n"
+        "),\n"
+        "visits AS (\n"
+        "  SELECT uuid, suid, visit_idx, state FROM marked WHERE is_screen = 1\n"
+        "),\n"
+        # 방문 단위 엣지. `visit_idx = 0` 은 첫 화면 이전이므로 `START` 엣지를 따로 만든다 —
+        # 그 자리에서 일어난 클릭이 붙을 곳이 없으면 조용히 사라진다.
+        "edges AS (\n"
+        "  SELECT uuid, suid, visit_idx, state AS from_state,\n"
+        "    coalesce(lead(state) OVER (PARTITION BY uuid, suid ORDER BY visit_idx),\n"
+        "             'EXIT') AS to_state\n"
+        "  FROM visits\n"
+        "  UNION ALL\n"
+        "  SELECT uuid, suid, 0 AS visit_idx, 'START' AS from_state, state AS to_state\n"
+        "  FROM visits WHERE visit_idx = 1\n"
+        "),\n"
+        "acts AS (\n"
+        "  SELECT uuid, suid, visit_idx,\n"
+        "    coalesce(nullif(trim(action_kind), ''), '(none)') AS action_kind\n"
+        "  FROM marked WHERE is_screen = 0\n"
+        "),\n"
+        # 클릭 있는 전이는 클릭마다 한 행, 클릭 없는 전이는 `(no_click)` 한 행.
+        "pairs AS (\n"
+        "  SELECT e.uuid, e.suid, e.from_state, a.action_kind, e.to_state\n"
+        "  FROM edges e\n"
+        "  JOIN acts a\n"
+        "    ON a.uuid = e.uuid AND a.suid = e.suid AND a.visit_idx = e.visit_idx\n"
+        "  UNION ALL\n"
+        f"  SELECT e.uuid, e.suid, e.from_state, {_lit(NO_CLICK)}, e.to_state\n"
+        "  FROM edges e\n"
+        "  WHERE NOT EXISTS (\n"
+        "    SELECT 1 FROM acts a\n"
+        "    WHERE a.uuid = e.uuid AND a.suid = e.suid AND a.visit_idx = e.visit_idx\n"
+        "  )\n"
+        ")\n"
+        "SELECT\n"
+        f"  {axis_cols},\n"
+        "  p.from_state,\n  p.action_kind,\n  p.to_state,\n"
+        "  count(*) AS cnt\n"
+        "FROM pairs p\n"
+        "JOIN kept k ON k.uuid = p.uuid AND k.suid = p.suid\n"
+        f"GROUP BY {axis_cols}, p.from_state, p.action_kind, p.to_state\n"
     )
