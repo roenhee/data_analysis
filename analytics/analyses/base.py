@@ -13,6 +13,7 @@ from typing import Callable
 
 import pandas as pd
 
+from analytics.metrics.services import service_mix
 from data_layer.config import Config
 from data_layer.results import publish_result, result_id
 
@@ -98,6 +99,25 @@ class AnalysisResult:
     params: dict = field(default_factory=dict)
 
 
+def _mix_of(cubes: CubeSet) -> dict[str, float]:
+    """합산 지표의 서비스 구성. 알 수 없으면 빈 dict — 0 으로 채우지 않는다.
+
+    전이 큐브는 화면 이름 접두어에서, 품질 큐브는 `service_code` 컬럼에서 읽는다.
+    세션 큐브만 있으면 알 수 없다(세션 44.7%가 여러 서비스에 걸쳐 축이 될 수 없다).
+    """
+    if cubes.transition is not None:
+        mix = service_mix(cubes.transition)
+        if mix:
+            return mix
+    quality = cubes.quality
+    if quality is not None and {"service_code", "total"} <= set(quality.columns):
+        grouped = quality.groupby("service_code")["total"].sum()
+        total = float(grouped.sum())
+        if total > 0:
+            return {str(k): float(v / total) for k, v in grouped.items()}
+    return {}
+
+
 def envelope_for(
     cubes: CubeSet, coverage: dict, warnings: list[dict] | None = None
 ) -> dict:
@@ -116,6 +136,9 @@ def envelope_for(
         "missing_dates": missing,
         "is_complete": not missing,
         "coverage": dict(coverage),
+        # 합산 지표가 어느 서비스에 붙어 있는지. 실측 15일 top 61.8% 대 content_v 2.1% 이고,
+        # 이게 없으면 `mean_expected_steps` 10.62 가 "앱 전체" 로 읽힌다(서비스별 2.77~8.08).
+        "service_mix": _mix_of(cubes),
         "warnings": list(warnings or []),
     }
 

@@ -14,7 +14,7 @@ from analytics.analyses.base import AnalysisResult, CubeSet, get_analysis
 from analytics.metrics.compare import comparable_dates, weight_skew
 from analytics.metrics.descriptive import SESSION_AXES
 from analytics.metrics.frame import full_combination_rows
-from analytics.metrics.services import NON_SCREEN_STATES, service_of
+from analytics.metrics.services import NON_SCREEN_STATES, services_of
 
 
 @dataclass(frozen=True)
@@ -243,9 +243,10 @@ def _service_slice(cubes: CubeSet, service: str) -> CubeSet:
     edges = cubes.transition
 
     def belongs(column):
-        return (edges[column].map(service_of) == service) | edges[column].isin(
-            NON_SCREEN_STATES
-        )
+        # `fillna(False)` 가 없으면 서비스가 없는 상태에서 비교가 `NA` 가 되고, `NA` 가
+        # 섞인 불리언으로 인덱싱하면 pandas 가 거부한다.
+        same = services_of(edges[column]).eq(service).fillna(False)
+        return same | edges[column].isin(NON_SCREEN_STATES)
 
     quality = cubes.quality
     return CubeSet(
@@ -273,26 +274,24 @@ def per_service(cubes: CubeSet, analysis_name: str, **params) -> ServiceBreakdow
             "session cube has no service column and 44.7% of sessions span more than "
             "one service, so splitting them would double-count"
         )
-    edges = cubes.transition.copy()
-    edges["_from_svc"] = edges["from_state"].map(service_of)
-    edges["_to_svc"] = edges["to_state"].map(service_of)
+    # 프레임을 복사하지 않는다 — 실측 328만 행이다. 서비스는 시리즈로만 들고 있는다.
+    edges = cubes.transition
+    from_svc = services_of(edges["from_state"])
+    to_svc = services_of(edges["to_state"])
+    counts = edges["cnt"]
 
     # **분모가 둘이다. 섞으면 물량이 조용히 틀린다.**
     #  - `share`/`cnt` 는 화면에서 **출발한** 전이 기준 (`-> EXIT` 포함). 방문 가중 지표가
     #    무엇으로 구성됐는지 말하는 값이라 화면 출발이 맞는 분모다.
     #  - `cross_service_share` 는 화면에서 **화면으로** 간 전이 기준. 서비스를 건너뛰는지
     #    물으려면 도착도 화면이어야 한다.
-    originating = edges[edges["_from_svc"].notna()]
-    by_service = originating.groupby("_from_svc")["cnt"].sum()
+    originating = from_svc.notna()
+    by_service = counts[originating].groupby(from_svc[originating]).sum()
     origin_total = float(by_service.sum())
 
-    screen_to_screen = edges[edges["_from_svc"].notna() & edges["_to_svc"].notna()]
-    s2s_total = float(screen_to_screen["cnt"].sum())
-    crossing = float(
-        screen_to_screen[
-            screen_to_screen["_from_svc"] != screen_to_screen["_to_svc"]
-        ]["cnt"].sum()
-    )
+    both = originating & to_svc.notna()
+    s2s_total = float(counts[both].sum())
+    crossing = float(counts[both & (from_svc != to_svc)].sum())
 
     pooled = fn(cubes, **params).headline
     rows = []
