@@ -1,5 +1,9 @@
 # 서비스별 분해 (A5) Implementation Plan
 
+> **완료 (2026-07-30).** Task 1~5 전부 끝났다 — 662 passed. 아래 본문은 당시 판단
+> 기록이고, **계획서가 틀렸던 곳은 "완료 기록" 절**에 모아 뒀다. 참고로 쓰는 사람은
+> 그 절을 먼저 읽는다 — 특히 `service_mix` 의 성능 결함과 죽은 픽스처 이야기.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 합산 지표가 어떻게 구성됐는지 결과물이 스스로 말하게 하고, 서비스별로 같은 분석을
@@ -1058,6 +1062,85 @@ git add tests/analytics/analyses/test_analyses_on_real_cubes.py \
         .claude/skills/basic-analysis/SKILL.md
 git commit -m "test: pin that the pooled flow headline sits outside every service"
 ```
+
+---
+
+## 완료 기록 (2026-07-30, Task 1~5)
+
+**Task 1~5 전부 완료.** 전체 스위트 **662 passed, 4 skipped, 1 xfailed** (16.9초).
+분석 8개(`cross_service_flow` 추가) + 연산자 3개(`per_service` 추가).
+커밋: `bc6eb6d` · `48e969b` · `03dec4b` · `30c8032` · `9d65a01`.
+
+### 실데이터에서 처음 나온 숫자
+
+**`switch_entropy` = 2.220438 nats.** 건너뛰는 쌍이 30개라 최대 ln(30)=3.401 의 **65%** —
+서비스 간 이동이 한 경로로 몰리지 않고 여러 방향으로 흩어진다.
+
+**작은 서비스는 top 으로 흘러간다** (출발지 대비 비중, 새 관찰):
+media→top **71.7%**, content_v→top **75.4%**, entertain→top 62.2%, sports→top 59.8%.
+top 은 60.3% 를 자기 안에 두고 search 는 59.6% 가 자기 루프(화면이 하나뿐이다).
+**합산 지표에서는 안 보이고 `per_service` 는 이 전이를 버리므로**, `cross_service_flow`
+가 유일하게 보여주는 자리다.
+
+**벗어나는 방향이 양쪽 다 실재한다:** `mean_expected_steps` 합산 10.62 > 최대 8.08,
+`mean_exit_prob` 합산 0.0975 < 최소 0.1407.
+
+**`outside_range` 는 무조건 울리는 경보가 아니다.** `screen_dwell_rank` 는 빈다 —
+방문당 체류가 물량 가중 평균이라 정의상 범위 안이다(합산 48.42, 서비스별 35.69~73.29).
+그래서 `screen_flow` 가 걸리는 건 체인 길이라는 지표의 성질이고 분해의 부작용이 아니다.
+
+### 계획서 코드에 있던 조용한 결함
+
+**`service_mix` 의 모양이 틀렸고 스위트가 2.6배 느려졌다(11.7 → 30.4초).** 봉투마다
+불리는 함수인데 계획서 코드가 행마다 문자열을 잘랐다. 고치는 데 세 번 걸렸고 순서가
+교훈이다:
+
+| 방식 | 실측 328만 행 |
+|---|---|
+| 계획서 그대로 (`[service_of(s) for s in ...]`) | 1.90s |
+| `str.split` 벡터화 | 1.38s |
+| 유일값에만 계산하고 매핑 (상태 16개) | 0.40s |
+| **먼저 상태로 묶고 서비스로 접기** | **0.05s** |
+
+구현이 아니라 **일의 모양**이 문제였다. 행은 328만인데 상태는 16개다. 벡터화만으로는
+27%밖에 못 줄였고, 행 단위 중간 시리즈를 아예 만들지 않는 게 답이었다.
+`per_service` 도 같은 이유로 5.5 → 1.9초(서비스마다 다시 계산하던 것을 한 번만).
+
+### 계획서 픽스처가 통과를 거짓으로 만든 곳
+
+**Task 2 픽스처의 top 슬라이스에 `EXIT` 로 가는 길이 없었다.** `screen_flow` 가
+`KeyError: unknown state: 'EXIT'` 로 죽어 top 행이 NaN 이 되고, `outside_range` 가
+**살아남은 media 한 줄만** 보고 "범위 밖" 이라고 말했다. 테스트는 통과했지만 이유가
+행동과 무관했다.
+
+**mutation check 가 그것을 "안 잡힘" 으로 드러냈다** — 도착 서비스 필터를 지워도 아무
+테스트가 안 죽었는데, 슬라이스가 이미 망가져 있었기 때문이다. 두 서비스가 각자 `EXIT` 로
+나가면서 서로 오가는 픽스처로 바꾸자(합산 8.86 대 1.00~1.75) 네 mutation 전부 잡혔다.
+**"mutation 이 안 잡힌다" 는 테스트가 약하다는 신호가 아니라 픽스처가 죽어 있다는 신호일
+수 있다.**
+
+### 계획서의 mutation check 가 틀렸던 곳
+
+**Task 4 의 "도착 필터를 지우면 `START`·`EXIT` 가 남아 테스트가 실패한다" 는 틀렸다.**
+`groupby` 가 NaN 키를 기본으로 버려서 그 필터는 **관측되지 않는다.** 관측되는 경우가
+하나 있고 그걸 테스트로 고정했다: 화면이 `EXIT` 로만 나가는 큐브
+(`top/a -> EXIT` 하나)는 출발만 보면 프레임이 비지 않아 통과하고, groupby 가 그 행을
+버려 분모가 0 이 되어 거부해야 하는 자리에서 `ZeroDivisionError` 가 난다.
+
+### 자체 검토가 구현 전에 잡은 것
+
+계획서를 쓰고 다시 읽는 단계에서 둘을 고쳤다 — **분모 두 종류를 섞은 것**(`share` 는
+화면 출발, `cross_service_share` 는 화면→화면인데 `cnt` 를 `mix × total` 로 되돌려
+계산해 물량이 틀렸다)과 **있을 수 없는 `(media, media)` 쌍을 기대한 픽스처**(그 서비스의
+유일한 엣지가 `EXIT` 로 끝나서 도착이 화면이 아니다).
+
+### 문서로만 남긴 것
+
+`per_service` 의 `dwell_coverage` 는 **서비스 내부 전이만**의 커버리지다(top 51.5%).
+서비스에서 출발한 전이 전체로 재면 top 64.7% 다 — 서비스를 건너뛰는 전이가 더 잘
+계측돼 있기 때문이다. 둘 다 옳은 값이라 코드를 고치지 않고 SKILL.md 의
+"Common mistakes" 에 갈라 적었다. **계측 수준을 물으면 후자, 슬라이스한 체인의 신뢰도를
+물으면 전자다.**
 
 ---
 
