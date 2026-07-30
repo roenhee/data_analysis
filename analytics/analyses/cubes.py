@@ -24,6 +24,10 @@ from data_layer.config import Config
 from data_layer.sources import load_sources
 
 DEFAULT_CUBE_NAMES = ("session", "transition", "quality")
+# 3단계 행동층 큐브. **기본 목록에 넣지 않는다** — `path` 가 하루 136만 행(15.6 MB)이라
+# 화면층만 보는 분석이 그걸 읽을 이유가 없다. 필요한 쪽이 `cube_names` 로 명시한다.
+ACTION_LAYER_CUBE_NAMES = ("action", "cond_transition", "path")
+ALL_CUBE_NAMES = DEFAULT_CUBE_NAMES + ACTION_LAYER_CUBE_NAMES
 
 
 def load_cube_set(
@@ -90,12 +94,18 @@ def load_cube_set(
             return frame
         return frame[frame["period"].isna() | frame["period"].isin(present)]
 
+    def frame_of(name: str) -> pd.DataFrame | None:
+        return cut(loaded[name].frame) if name in loaded else None
+
     return CubeSet(
-        session=cut(loaded["session"].frame) if "session" in loaded else None,
-        transition=cut(loaded["transition"].frame) if "transition" in loaded else None,
-        quality=cut(loaded["quality"].frame) if "quality" in loaded else None,
+        session=frame_of("session"),
+        transition=frame_of("transition"),
+        quality=frame_of("quality"),
         state_dict_version=state_dict.version(),
         services=list(services),
         requested_dates=requested,
         present_dates=present,
+        action=frame_of("action"),
+        cond_transition=frame_of("cond_transition"),
+        path=frame_of("path"),
     )

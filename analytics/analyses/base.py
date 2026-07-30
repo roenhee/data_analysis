@@ -48,11 +48,17 @@ class CubeSet:
     services: list[str]
     requested_dates: list[str]
     present_dates: list[str]
+    # 3단계 행동층 큐브. **기본이 `None`** 이라 기존 호출 전부가 그대로 돈다 —
+    # 필수 필드로 만들면 손으로 조립한 곳과 테스트가 한꺼번에 깨진다.
+    action: pd.DataFrame | None = None
+    cond_transition: pd.DataFrame | None = None
+    path: pd.DataFrame | None = None
 
     def filter(self, dates: list[str] | None = None, **segment) -> "CubeSet":
         """날짜·축으로 좁힌 새 `CubeSet`. 연산자가 세그먼트를 가를 때 쓴다.
 
-        큐브마다 컬럼이 다르므로(전이 큐브엔 `uv` 가 없다) 없는 컬럼 조건은 건너뛴다.
+        큐브마다 컬럼이 다르므로(전이 큐브엔 `uv` 가 없고 `cond_transition` 은 4축이다)
+        없는 컬럼 조건은 건너뛴다.
         """
         def cut(df):
             if df is None:
@@ -75,6 +81,9 @@ class CubeSet:
             services=list(self.services),
             requested_dates=list(self.requested_dates),
             present_dates=list(dates) if dates is not None else list(self.present_dates),
+            action=cut(self.action),
+            cond_transition=cut(self.cond_transition),
+            path=cut(self.path),
         )
 
 
