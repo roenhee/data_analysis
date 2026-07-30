@@ -97,21 +97,46 @@ def _shipped_analyses() -> list[str]:
     ]
 
 
+# 분석이 어느 큐브를 필요로 하는가. 이 픽스처는 **화면층 세 개만** 읽는다 — 행동층 큐브는
+# 15일 중 일부만 빌드돼 있어서, 넣으면 날짜 교집합이 좁아져 15일 회귀 그물이 전부 깨진다.
+# 그래서 행동층 분석은 여기서 건너뛰고 아래 테스트가 **무엇이 건너뛰어졌는지** 고정한다 —
+# 화면층 분석이 이 이유로 조용히 빠지면 그 테스트가 실패한다.
+ACTION_LAYER_REQUIRES = {
+    "click_distribution": "action",
+    "conditional_flow": "cond_transition",
+    "path_ranking": "path",
+    "markov_order_test": "path",
+}
+
+
+def _runnable(name: str, cubes: CubeSet) -> bool:
+    need = ACTION_LAYER_REQUIRES.get(name)
+    return need is None or getattr(cubes, need) is not None
+
+
 @pytest.fixture(scope="module")
 def real_results(real_cubes) -> dict:
-    """배포되는 분석을 한 번만 돌려 재사용한다."""
+    """배포되는 분석을 한 번만 돌려 재사용한다. 큐브가 없는 분석은 건너뛴다."""
     return {
         name: get_analysis(name)(real_cubes, **_params_for(name, real_cubes))
         for name in _shipped_analyses()
+        if _runnable(name, real_cubes)
     }
+
+
+@needs_cubes
+def test_only_the_action_layer_analyses_are_skipped(real_cubes, real_results):
+    """화면층 분석이 큐브 없음으로 조용히 빠지면 여기서 걸린다."""
+    skipped = [n for n in _shipped_analyses() if n not in real_results]
+    assert set(skipped) <= set(ACTION_LAYER_REQUIRES), skipped
 
 
 @needs_cubes
 def test_the_shipped_registry_is_what_it_should_be():
     """분석이 추가·삭제되면 여기서 눈에 띈다."""
     assert _shipped_analyses() == [
-        "cross_service_flow", "quality_report", "reachability",
-        "screen_communities", "screen_dwell_rank", "screen_flow",
+        "click_distribution", "cross_service_flow", "quality_report",
+        "reachability", "screen_communities", "screen_dwell_rank", "screen_flow",
         "screen_pair_affinity", "session_trend",
     ]
 
