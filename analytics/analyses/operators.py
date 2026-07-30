@@ -238,20 +238,28 @@ class ServiceBreakdown:
     services: list[str]
 
 
-def _service_slice(cubes: CubeSet, service: str) -> CubeSet:
-    """그 서비스 안에서만 일어난 전이. 세션 경계(`START`·`EXIT`)는 남긴다."""
+def _service_slice(
+    cubes: CubeSet, service: str, from_svc: pd.Series, to_svc: pd.Series
+) -> CubeSet:
+    """그 서비스 안에서만 일어난 전이. 세션 경계(`START`·`EXIT`)는 남긴다.
+
+    `from_svc`·`to_svc` 를 **밖에서 받는다.** 여기서 다시 계산하면 서비스마다 328만 행을
+    두 번 훑어 실측 5.5초가 되는데, 부르는 쪽이 이미 갖고 있는 값이다.
+    """
     edges = cubes.transition
 
-    def belongs(column):
+    def belongs(column, service_column):
         # `fillna(False)` 가 없으면 서비스가 없는 상태에서 비교가 `NA` 가 되고, `NA` 가
         # 섞인 불리언으로 인덱싱하면 pandas 가 거부한다.
-        same = services_of(edges[column]).eq(service).fillna(False)
+        same = service_column.eq(service).fillna(False)
         return same | edges[column].isin(NON_SCREEN_STATES)
 
     quality = cubes.quality
     return CubeSet(
         session=None,
-        transition=edges[belongs("from_state") & belongs("to_state")],
+        transition=edges[
+            belongs("from_state", from_svc) & belongs("to_state", to_svc)
+        ],
         quality=quality[quality["service_code"] == service]
         if quality is not None and "service_code" in quality.columns
         else None,
@@ -300,7 +308,10 @@ def per_service(cubes: CubeSet, analysis_name: str, **params) -> ServiceBreakdow
         row = {"service": service, "cnt": volume,
                "share": volume / origin_total if origin_total else float("nan")}
         try:
-            row.update(fn(_service_slice(cubes, service), **params).headline)
+            row.update(
+                fn(_service_slice(cubes, service, from_svc, to_svc),
+                   **params).headline
+            )
         except Exception as exc:  # 한 서비스가 죽어도 나머지는 낸다
             row["error"] = f"{type(exc).__name__}: {exc}"
         rows.append(row)

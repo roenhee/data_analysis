@@ -247,6 +247,84 @@ def test_the_pooled_rate_would_hide_the_service_that_is_bad(real_cubes, real_res
 
 
 @needs_cubes
+def test_the_pooled_flow_headline_sits_outside_every_service(real_cubes):
+    """A5 를 하게 만든 사실. 합산 기대 화면 수가 여섯 서비스 전부보다 크다.
+
+    실측: 합산 **10.62** 대 서비스별 2.77(content_v)~8.08(top). 이탈확률은 반대로 합산
+    **0.0975** 가 최소 0.1407 보다 **낮다** — 벗어나는 방향이 위쪽만이 아니다. 화면 간
+    전이의 49.68%가 서비스를 건너뛰어서, 합친 체인에는 어떤 단일 서비스 안에도 없는
+    전이가 있다. 고정할 것은 크기가 아니라 **합산이 범위 밖이라는 사실**이다.
+    """
+    from analytics.analyses.operators import per_service
+
+    got = per_service(real_cubes, "screen_flow")
+    assert got.services == ["content_v", "entertain", "media", "search", "sports",
+                            "top"]
+    steps_lo, steps_hi = got.outside_range["mean_expected_steps"]
+    assert got.pooled["mean_expected_steps"] > steps_hi
+    exit_lo, _ = got.outside_range["mean_exit_prob"]
+    assert got.pooled["mean_exit_prob"] < exit_lo
+    assert 0.45 < got.cross_service_share < 0.55
+
+
+@needs_cubes
+def test_a_simple_weighted_average_is_not_flagged_as_outside_the_range(real_cubes):
+    """`outside_range` 는 무조건 울리는 경보가 아니다.
+
+    `screen_dwell_rank` 의 방문당 체류는 물량 가중 평균이라 **반드시** 서비스별 범위
+    안이다(실측 합산 48.42, 서비스별 35.69~73.29). 그래서 `screen_flow` 가 걸리는 것은
+    체인 길이라는 지표의 성질이고 분해 자체의 부작용이 아니다.
+    """
+    from analytics.analyses.operators import per_service
+
+    assert per_service(real_cubes, "screen_dwell_rank").outside_range == {}
+
+
+@needs_cubes
+def test_the_service_mix_shows_the_pooled_number_is_mostly_top(real_results):
+    """실측 top 61.8% 대 content_v 2.1%. 봉투에 없으면 합산이 "앱 전체" 로 읽힌다."""
+    mix = real_results["screen_flow"].envelope["service_mix"]
+    assert set(mix) == {"top", "media", "entertain", "sports", "content_v", "search"}
+    assert mix["top"] > 0.55
+    assert sum(mix.values()) == pytest.approx(1.0)
+
+
+@needs_cubes
+def test_cross_service_movement_is_about_half_of_screen_transitions(real_results):
+    """감춰져 있던 절반. `screen_flow` 는 화면 단위라 이걸 못 보여준다.
+
+    실측 `cross_service_share` 0.4968, `switch_entropy` 2.2204 nats. 건너뛰는 쌍이
+    30개라 최대 엔트로피가 ln(30)=3.40 이므로 65% 수준 — 한 경로로 몰리는 게 아니라
+    여러 방향으로 흩어진다.
+    """
+    got = real_results["cross_service_flow"]
+    assert 0.45 < got.headline["cross_service_share"] < 0.55
+    assert 2.0 < got.headline["switch_entropy"] < 2.5
+    assert got.frame["cnt"].is_monotonic_decreasing
+    assert set(got.frame["from_service"]) == {"top", "media", "entertain", "sports",
+                                              "content_v", "search"}
+
+
+@needs_cubes
+def test_the_smaller_services_send_most_of_their_traffic_to_top(real_results):
+    """실측에서 처음 드러난 것: 작은 서비스들은 top 으로 흘러간다.
+
+    출발지 대비 비중으로 media→top **71.7%**, content_v→top **75.4%**,
+    entertain→top 62.2%, sports→top 59.8% 다. top 은 60.3% 를 자기 안에 두고
+    search 는 59.6% 가 자기 자신(화면이 하나뿐이라 자기 루프)이다.
+
+    합산 지표에서는 이게 안 보인다 — `screen_flow` 는 화면 단위이고 `per_service` 는
+    이 전이를 버린다.
+    """
+    frame = real_results["cross_service_flow"].frame.set_index(
+        ["from_service", "to_service"]
+    )
+    for service in ("media", "content_v", "entertain", "sports"):
+        assert frame.loc[(service, "top"), "share_of_origin"] > 0.55, service
+    assert frame.loc[("top", "top"), "share_of_origin"] > 0.55
+
+
+@needs_cubes
 def test_the_session_cube_is_additive_except_uv(real_cubes):
     """`session_trend` 의 슬라이스 fallback 이 서 있는 바닥. 실큐브로 직접 검산한다.
 

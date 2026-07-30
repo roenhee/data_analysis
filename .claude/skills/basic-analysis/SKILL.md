@@ -1,6 +1,6 @@
 ---
 name: basic-analysis
-description: Use when someone wants full-population analytics on the data_analysis project — 기간별 UV/PV (unique visitors / page views), 세션 수, 체류시간(dwell time), 유저당 세션·체류, 화면 전이 마르코프 지표 (전이확률·이탈확률·stationary·기대 걸음 수·흡수확률·PMI·엔트로피·PageRank), 화면 군집, 도달 확률 — segmented by app_version / os / gender / age_band / daypart / service_type, and 세그먼트 비교(compare)·구성 분해(decompose). Reads pre-built local cubes; never queries Trino directly.
+description: Use when someone wants full-population analytics on the data_analysis project — 기간별 UV/PV (unique visitors / page views), 세션 수, 체류시간(dwell time), 유저당 세션·체류, 화면 전이 마르코프 지표 (전이확률·이탈확률·stationary·기대 걸음 수·흡수확률·PMI·엔트로피·PageRank), 화면 군집, 도달 확률, 서비스 간 이동 — segmented by app_version / os / gender / age_band / daypart / service_type, and 세그먼트 비교(compare)·구성 분해(decompose)·서비스별 분해(per_service). Reads pre-built local cubes; never queries Trino directly.
 ---
 
 # Basic Analysis
@@ -87,6 +87,7 @@ partition.
 | `screen_dwell_rank` | transition | 화면별 방문당 체류 순위 | `mean_seconds_per_visit`·`dwell_coverage` | `warn_below` |
 | `screen_flow` | transition | 화면별 이탈·정상분포·기대 걸음 수·엔트로피·PageRank | `mean_expected_steps`·`mean_exit_prob` | `exit_within`·`damping` |
 | `screen_pair_affinity` | transition | **쌍**(from, to)별 PMI + `cnt` (PMI 내림차순) | `mutual_information`·`pairs` | — |
+| `cross_service_flow` | transition | **서비스 쌍**별 이동 건수·출발지 대비 비중 | `cross_service_share`·`switch_entropy` | — |
 | `reachability` | transition | k 걸음 안에 목표 화면에 닿을 확률 곡선 | `p_hit_within_{max_k}` | `source`·`target`·`max_k` **(필수)** |
 | `screen_communities` | transition | 화면 군집 (Louvain) | `communities`·`modularity` | `seed`·`resolution` |
 | `quality_report` | quality | 검사별·날짜별 위반 비율 | `worst_{검사}`·`exit_corroboration` | `thresholds` |
@@ -127,6 +128,8 @@ PMI −11~−15.5 다.
 | `screen_dwell_rank` | 15행 × 6열 | 0.24s | 방문당 48.4초, 커버리지 56.5% |
 | `screen_flow` | 15행 × 15열 | 0.32s | 기대 걸음 수 10.62, 이탈확률 9.75% |
 | `screen_pair_affinity` | 251행 × 4열 | 0.15s | 상호정보량 0.641 nats, 얇은 셀 18.9% |
+| `cross_service_flow` | 36행 × 4열 | 0.84s | 서비스 건너뛰기 49.68%, 전환 엔트로피 2.220 nats |
+| `per_service` (연산자) | — | 1.9s | 서비스별로 분석을 다시 돌린다 |
 | `screen_communities` | 15행 × 4열 | 0.48s | 군집 3개, modularity 0.394 |
 | `quality_report` | 120행 × 5열 | 0.36s | 이탈 뒷받침 89.2%, 화면 커버리지 78.0% |
 | `compare` (15일, 두 세그먼트) | — | 5.8s | 날짜별로 분석을 다시 돌리므로 가장 비싸다 |
@@ -142,7 +145,7 @@ PMI −11~−15.5 다.
 # PYTHONPATH=. .venv/bin/python this_script.py
 from analytics.analyses import get_analysis, list_analyses, publish
 from analytics.analyses.cubes import load_cube_set
-from analytics.analyses.operators import compare, decompose
+from analytics.analyses.operators import compare, decompose, per_service
 from analytics.metrics.load import load_holidays, load_releases
 from data_layer.config import Config
 
@@ -177,6 +180,13 @@ d = decompose(cubes.filter(service_type="MA"), c, by=["period"],
 d.within            # 층 안 효과 = 구성이 b 와 같았다면의 델타
 d.between           # 구성 변화가 만든 몫 (within + between == pooled)
 d.composition       # 축별 구성 어긋남 (총변동거리)
+
+# 서비스별로 같은 분석을 돌린다 — 재빌드 없이 화면 이름 접두어에서 서비스를 읽는다
+b = per_service(cubes, "screen_flow")
+b.frame                 # 서비스별 headline + 물량·비중
+b.pooled                # 합산 headline
+b.outside_range         # 합산이 서비스별 범위 밖인 headline 키 -> {키: (최소, 최대)}
+b.cross_service_share   # 서비스별로 자를 때 사라진 전이 비중 (실측 0.4968)
 
 publish(config, flow, run_id="r1", analysis_type="screen_flow", title="MA 화면 흐름")
 ```
@@ -269,6 +279,21 @@ publish(config, flow, run_id="r1", analysis_type="screen_flow", title="MA 화면
   `cubes.filter(app_version=...)` 로 따로 묻는다.
 - Passing the busiest screen pair to `reachability`. 실측에서 가장 굵은 쌍은
   `top/엠탑조회` → 자기 자신인 자기 루프이고, `reachability` 가 거부한다.
+- **Reading a pooled screen-level headline as "the app".** 실측 `mean_expected_steps` 는
+  합산 **10.62** 인데 서비스별로는 **2.77~8.08** 이다 — 합산이 여섯 전부보다 크다. 이탈확률은
+  반대로 합산 0.0975 가 최소 0.1407 보다 낮다. 화면 간 전이의 **49.68%가 서비스를 건너뛰어서**
+  합친 체인에만 있는 전이가 들어 있기 때문이다. 봉투의 `service_mix` 가 구성을
+  말해주고(top 61.8%, content_v 2.1%), `per_service` 의 `outside_range` 가 이 상황을 자동으로
+  표시한다. 서비스 간 이동 자체는 `cross_service_flow` 로 본다.
+  - 무조건 울리는 경보가 아니다: `screen_dwell_rank` 의 방문당 체류는 물량 가중 평균이라
+    항상 범위 안이고(합산 48.42, 서비스별 35.69~73.29) `outside_range` 가 빈다.
+- Comparing the same screen name across services. `m_newsview_보기` 를 media·entertain·
+  sports **세 팀이 쓴다.** 서비스 접두어로 분리돼 있지만 계측 방식이 다르다 — 이름 하나가
+  여러 페이지를 가리키는 비율이 sports 28.7%, entertain 0.01% 다.
+- Reading `per_service` 의 `dwell_coverage` 를 그 서비스의 계측 수준으로 읽기. 그 값은
+  **서비스 내부 전이만**의 커버리지다(실측 top 51.5%). 서비스에서 출발한 전이 전체로 재면
+  top 64.7% 다 — 서비스를 건너뛰는 전이의 커버리지가 더 높기 때문이다. 계측 수준을 물으려면
+  후자를, 슬라이스한 체인의 신뢰도를 물으려면 전자를 본다.
 - Quoting `screen_pair_affinity` 의 PMI 1위를 `cnt` 를 보지 않고 인용하기. 실측 1위는
   관측 **263건**짜리 쌍이고, 엣지 셀의 18.9% 가 cnt 1 이다 — PMI 는 얇은 셀에서 가장
   크게 튄다. 임계치를 두지 않은 대신 `cnt` 열을 함께 내므로 그 열로 걸러서 읽는다.
