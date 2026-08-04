@@ -26,7 +26,7 @@ import streamlit as st
 
 from analytics.analyses import get_analysis
 from analytics.analyses.cubes import load_cube_set
-from dashboard import charts, filters, params, render
+from dashboard import charts, filters, glossary, params, render
 from dashboard.state import decode_state, encode_state
 from data_layer.config import Config
 
@@ -142,11 +142,14 @@ def _draw(result, top: int) -> None:
     """headline 카드 → 표 → 차트 → 봉투."""
     cards = render.headline_cards(result.headline)
     cols = st.columns(len(cards) or 1)
-    for col, (label, value) in zip(cols, cards):
-        col.metric(label, value)
+    for col, (key, value) in zip(cols, cards):
+        col.metric(glossary.metric_label(key), value,
+                   help=glossary.metric_help(key) or None)
 
     frame = render.table_slice(result.frame, top)
-    st.dataframe(frame, use_container_width=True)
+    display = frame.rename(columns={c: glossary.column_label(c)
+                                    for c in frame.columns})
+    st.dataframe(display, use_container_width=True)
 
     kind = charts.chart_kind(result.viz)
     x = result.viz.get("x")
@@ -202,6 +205,9 @@ def main():
     result = _run(state)
     if result is not None:
         st.subheader(analysis)
+        desc = glossary.analysis_desc(analysis)
+        if desc:
+            st.caption(desc)
         _draw(result, state["top"])
         st.caption(f"표시 {min(state['top'], len(result.frame))} / "
                    f"전체 {len(result.frame)}개")
