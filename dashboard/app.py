@@ -171,21 +171,27 @@ def _draw(result, top: int) -> None:
             glossary.column_label(c), help=glossary.column_help(c) or None)
             for c in display.columns})
 
-    kind = charts.chart_kind(result.viz)
-    x = result.viz.get("x")
-    if kind == "bar" and x in result.frame.columns:
-        y = next((c for c in result.frame.columns
-                  if pd.api.types.is_numeric_dtype(result.frame[c])), None)
-        if y:
-            st.bar_chart(charts.bar_data(result.frame, x, y, top))
-    elif kind == "line" and x in result.frame.columns:
-        st.line_chart(charts.line_data(result.frame, x))
-    elif kind == "heatmap":
-        to = "to_state" if "to_state" in result.frame.columns else "to_service"
-        value = result.viz.get("value", "cnt")
-        grid = charts.heatmap_pivot(result.frame, x, to, value)
-        st.dataframe(grid.style.background_gradient(cmap="Blues"),
-                     use_container_width=True)
+    if result.viz.get("kind") == "graph":
+        st.graphviz_chart(
+            charts.graph_dot(result.frame, result.viz,
+                             label_of=glossary.value_label),
+            use_container_width=True)
+    else:
+        kind = charts.chart_kind(result.viz)
+        x = result.viz.get("x")
+        if kind == "bar" and x in result.frame.columns:
+            y = next((c for c in result.frame.columns
+                      if pd.api.types.is_numeric_dtype(result.frame[c])), None)
+            if y:
+                st.bar_chart(charts.bar_data(result.frame, x, y, top))
+        elif kind == "line" and x in result.frame.columns:
+            st.line_chart(charts.line_data(result.frame, x))
+        elif kind == "heatmap":
+            to = "to_state" if "to_state" in result.frame.columns else "to_service"
+            value = result.viz.get("value", "cnt")
+            grid = charts.heatmap_pivot(result.frame, x, to, value)
+            st.dataframe(grid.style.background_gradient(cmap="Blues"),
+                         use_container_width=True)
 
     env = render.envelope_summary(result.envelope)
     warns = [glossary.warning_label(w) for w in env["warnings"]]

@@ -105,5 +105,6 @@ def screen_communities(cubes: CubeSet, seed: int = DEFAULT_SEED,
         },
         compare_key="state",
         envelope=envelope_for(cubes, {"dwell": dwell_coverage(edges)}),
-        viz={"kind": "graph", "x": "state"},
+        viz={"kind": "graph", "x": "state", "group": "community",
+             "edges": [[u, v, float(w)] for u, v, w in graph.edges(data="weight")]},
     )

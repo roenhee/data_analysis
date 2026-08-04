@@ -56,6 +56,19 @@ def test_start_and_exit_are_excluded_from_communities():
     assert "EXIT" not in set(got.frame["state"])
 
 
+def test_viz_carries_the_edge_list_for_drawing_the_graph():
+    """노드 프레임만으론 엣지가 없어 대시보드가 실제 네트워크 그래프를 못 그린다."""
+    got = get_analysis("screen_communities")(_cubes(TWO_TRIANGLES))
+    assert got.viz["kind"] == "graph"
+    assert got.viz["group"] == "community"
+    edges = got.viz["edges"]
+    assert edges
+    assert all(isinstance(w, float) for _, _, w in edges)
+    states = set(got.frame["state"])
+    endpoints = {s for u, v, _ in edges for s in (u, v)}
+    assert endpoints <= states
+
+
 def test_the_result_is_deterministic_for_a_fixed_seed():
     """Louvain 은 무작위 초기화가 있다. 시드를 고정하지 않으면 실행마다 답이 바뀐다."""
     first = get_analysis("screen_communities")(_cubes(TWO_TRIANGLES)).frame
