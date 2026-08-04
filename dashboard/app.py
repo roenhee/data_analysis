@@ -80,7 +80,6 @@ def _seed_from_url() -> None:
     keys = list(TAB_LABELS.keys())
     st.session_state["w_tab"] = TAB_LABELS[safe_tab(s["tab"], keys)]
     st.session_state["w_dates"] = ":".join(s["dates"]) or DEFAULT_DATES
-    st.session_state["w_services"] = s["services"] or SERVICES
     for axis in filters.SEGMENT_AXES:
         st.session_state[f"w_{axis}"] = s.get(axis, "")
     st.session_state["w_top"] = int(s["top"])
@@ -179,7 +178,13 @@ def main():
 
     st.sidebar.header("세그먼트")
     dates = st.sidebar.text_input("기간 (start:end)", key="w_dates")
-    services = st.sidebar.multiselect("서비스 (빌드 범위)", SERVICES, key="w_services")
+    # 서비스는 축이 아니라 '빌드 범위'다 — 큐브가 6서비스로 빌드돼 있어 부분 선택은 그
+    # 조합 큐브가 없어 에러가 난다. 고정으로 막고, 서비스별 보기는 후속(per_service)으로.
+    st.sidebar.multiselect(
+        "서비스 (빌드 범위 · 고정)", SERVICES, default=SERVICES, disabled=True,
+        help="큐브가 6서비스로 한 번 빌드돼 있어 부분 선택은 안 됩니다. 서비스별로 보려면 "
+             "그 서비스로 큐브를 빌드하거나 per_service 분석(후속)을 씁니다.")
+    services = list(SERVICES)
     axes = {a: st.sidebar.text_input(a, key=f"w_{a}") for a in filters.SEGMENT_AXES}
     st.sidebar.markdown("---")
     analysis = _analysis_widget(tab)
