@@ -258,6 +258,55 @@ def screen_transition(cubes: CubeSet, **_) -> AnalysisResult:
     )
 
 
+@analysis("hub_neighbors")
+def hub_neighbors(cubes: CubeSet, screen: str = "", **_) -> AnalysisResult:
+    """한 화면의 이웃: 어디서 들어오고(IN) 어디로 나가는지(OUT)를 건수·비중으로.
+
+    `screen` 이 비면 PageRank(구조적 중심성) 최상위 화면을 자동으로 '허브'로 고른다.
+    IN 은 그 화면으로 들어오는 전이(count 행렬의 열), OUT 은 나가는 전이(행)다.
+    비중은 그 방향 전체 대비다(IN 끼리 합 1, OUT 끼리 합 1). START·EXIT 도 이웃으로
+    남긴다 — 'START 에서 바로 들어옴', 'EXIT 로 나감(이탈)' 은 허브의 실제 이웃이다.
+    """
+    edges = cubes.transition
+    if edges is None:
+        raise ValueError("hub_neighbors needs the transition cube; it is absent")
+    P = transition_matrix(edges)
+    if not screen:
+        pr = pagerank(P)
+        screen = pr.sort_values("pagerank", ascending=False).iloc[0]["state"]
+    if screen not in P.states:
+        raise ValueError(f"unknown screen: {screen!r}")
+    i = P.states.index(screen)
+    out_total = float(P.counts[i].sum())
+    in_total = float(P.counts[:, i].sum())
+    rows = []
+    for j, other in enumerate(P.states):
+        if P.counts[i][j] > 0:
+            rows.append({"hub": screen, "direction": "OUT", "neighbor": other,
+                         "cnt": float(P.counts[i][j]),
+                         "share": float(P.counts[i][j] / out_total) if out_total else 0.0})
+        if P.counts[j][i] > 0:
+            rows.append({"hub": screen, "direction": "IN", "neighbor": other,
+                         "cnt": float(P.counts[j][i]),
+                         "share": float(P.counts[j][i] / in_total) if in_total else 0.0})
+    frame = pd.DataFrame(
+        rows, columns=["hub", "direction", "neighbor", "cnt", "share"]
+    ).sort_values(["direction", "cnt"], ascending=[True, False], ignore_index=True)
+    in_rows = frame[frame["direction"] == "IN"]
+    out_rows = frame[frame["direction"] == "OUT"]
+    headline = {
+        "in_degree": float((P.counts[:, i] > 0).sum()),
+        "out_degree": float((P.counts[i] > 0).sum()),
+        "in_top_share": float(in_rows["share"].max()) if len(in_rows) else float("nan"),
+        "out_top_share": float(out_rows["share"].max()) if len(out_rows) else float("nan"),
+    }
+    return AnalysisResult(
+        frame=frame, headline=headline, compare_key=None,
+        envelope=envelope_for(cubes, {}, _thin_cell_warning(edges)),
+        viz={"kind": "table"},
+    )
+
+
 @analysis("cross_service_flow")
 def cross_service_flow(cubes: CubeSet, **_) -> AnalysisResult:
     """서비스 사이의 이동. **화면 간 전이의 절반이 여기 있다.**

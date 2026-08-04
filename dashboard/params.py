@@ -30,6 +30,7 @@ ANALYSIS_PARAMS: dict[str, list[Param]] = {
     "screen_flow": [Param("exit_within", "pair"), Param("damping", "float")],
     "screen_dwell_rank": [Param("warn_below", "float")],
     "screen_communities": [Param("seed", "int"), Param("resolution", "float")],
+    "hub_neighbors": [Param("screen", "screen")],
 }
 
 

@@ -35,7 +35,7 @@ STATE_DICT_VERSION = "sd_2ab5ec25e750dda2"
 TABS = {
     "overview": ["session_trend"],
     "flow": ["screen_flow", "screen_dwell_rank", "screen_pair_affinity",
-             "screen_transition", "reachability", "screen_communities"],
+             "screen_transition", "hub_neighbors", "reachability", "screen_communities"],
     "action": ["click_distribution", "conditional_flow", "path_ranking",
                "markov_order_test"],
     "service": ["cross_service_flow"],
