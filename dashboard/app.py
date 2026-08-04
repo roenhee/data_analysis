@@ -10,9 +10,9 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from analytics.analyses import get_analysis, list_analyses
+from analytics.analyses import get_analysis
 from dashboard import charts, filters, params, render
-from dashboard.state import DEFAULTS, decode_state, encode_state
+from dashboard.state import decode_state, encode_state
 from data_layer.config import Config
 
 STATE_DICT_VERSION = "sd_2ab5ec25e750dda2"
@@ -52,11 +52,16 @@ def _sidebar(state: dict) -> dict:
     st.sidebar.markdown("**파라미터**")
     values = {}
     for p in params.params_for(state["analysis"]):
-        raw = st.sidebar.text_input(
-            f"{p.name}{' *' if p.required else ''}",
-            str(state["params"].get(p.name, "")))
-        if raw:
-            values[p.name] = int(raw) if p.kind == "int" else raw
+        current = str(state["params"].get(p.name, ""))
+        if p.kind == "choice":
+            options = list(p.choices)
+            idx = options.index(current) if current in options else 0
+            values[p.name] = st.sidebar.selectbox(p.name, options, index=idx)
+        else:
+            raw = st.sidebar.text_input(
+                f"{p.name}{' *' if p.required else ''}", current)
+            if raw:
+                values[p.name] = int(raw) if p.kind == "int" else raw
     state["params"] = values
     return state
 
@@ -101,12 +106,18 @@ def _draw(result, top: int):
                f"사전 {env['state_dict_version']} · 날짜 {env['n_dates']}일")
 
 
+def safe_tab(tab: str, valid: list[str]) -> str:
+    """알 수 없는 tab(손댄 URL)은 기본 탭으로 떨군다 — 크래시 대신."""
+    return tab if tab in valid else "overview"
+
+
 def main():
     st.set_page_config(page_title="데이터 분석 대시보드", layout="wide")
     state = decode_state(dict(st.query_params))
 
     labels = list(TAB_LABELS.values())
     keys = list(TAB_LABELS.keys())
+    state["tab"] = safe_tab(state["tab"], keys)
     picked = st.radio("모드", labels, horizontal=True,
                       index=keys.index(state["tab"]), label_visibility="collapsed")
     state["tab"] = keys[labels.index(picked)]
