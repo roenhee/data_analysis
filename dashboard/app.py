@@ -45,7 +45,7 @@ def _sidebar(state: dict) -> dict:
         "기간 (start:end)", ":".join(state["dates"]) or "2026-07-14:2026-07-28")
     state["dates"] = [d for d in dates.split(":") if d]
     state["services"] = st.sidebar.multiselect(
-        "서비스 (빌드 범위)", SERVICES, default=state["services"] or ["top"])
+        "서비스 (빌드 범위)", SERVICES, default=state["services"] or SERVICES)
     for axis in filters.SEGMENT_AXES:
         state[axis] = st.sidebar.text_input(axis, state.get(axis, ""))
 

@@ -1,7 +1,20 @@
 import pandas as pd
 
 from analytics.analyses.base import CubeSet
-from dashboard.filters import cube_names_for, apply_segment
+from dashboard.filters import cube_names_for, apply_segment, expand_dates
+
+
+def test_expand_dates_fills_the_range():
+    assert expand_dates(["2026-07-14", "2026-07-16"]) == [
+        "2026-07-14", "2026-07-15", "2026-07-16"]
+
+
+def test_expand_dates_single_day_unchanged():
+    assert expand_dates(["2026-07-14"]) == ["2026-07-14"]
+
+
+def test_expand_dates_empty_is_empty():
+    assert expand_dates([]) == []
 
 
 def test_cube_names_for_screen_analysis_is_default():

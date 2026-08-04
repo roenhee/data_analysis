@@ -1,6 +1,8 @@
 """세그먼트 dict → CubeSet. load_cube_set 위의 얇은 배선."""
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from analytics.analyses.base import CubeSet
 from analytics.analyses.cubes import (
     ALL_CUBE_NAMES,
@@ -16,6 +18,20 @@ ACTION_ANALYSES = frozenset(
 
 # app.py 가 사이드바 위젯으로 채우는 축들.
 SEGMENT_AXES = ("service_type", "app_version", "os", "gender", "age_band", "daypart")
+
+
+def expand_dates(dates: list[str]) -> list[str]:
+    """`[start, end]` 를 그 사이 매일로 전개한다. 한 개면 그대로, 비면 빈 리스트.
+
+    "start:end" UI 입력은 양끝 두 날짜인데 load_cube_set 은 날짜별 개별 목록을 받는다.
+    """
+    if len(dates) < 2:
+        return list(dates)
+    start, end = date.fromisoformat(dates[0]), date.fromisoformat(dates[-1])
+    if end < start:
+        return list(dates)
+    return [(start + timedelta(days=i)).isoformat()
+            for i in range((end - start).days + 1)]
 
 
 def cube_names_for(analysis: str) -> tuple[str, ...]:
@@ -38,7 +54,7 @@ def load_for(config: Config, segment: dict, analysis: str,
     """
     cubes = load_cube_set(
         config,
-        dates=segment["dates"],
+        dates=expand_dates(segment["dates"]),
         services=segment["services"],
         state_dict_version=state_dict_version,
         cube_names=cube_names_for(analysis),
