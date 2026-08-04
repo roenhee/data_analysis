@@ -53,6 +53,21 @@ def test_headline_carries_mean_expected_steps_and_mean_exit_prob():
     assert got.headline["mean_exit_prob"] == pytest.approx(0.625)
 
 
+def test_exit_lift_is_exit_prob_normalized_by_the_visit_weighted_baseline():
+    """`exit_lift` = 화면 이탈률 / 방문 가중 평균 이탈률(baseline, 노트북 `lift_exit`).
+
+    baseline 은 모든 행에서 headline 의 `mean_exit_prob`(0.625)과 같은 상수라야 한다.
+    A: 0.4 / 0.625 = 0.64 (평균보다 덜 떠남),  B: 1.0 / 0.625 = 1.6 (평균보다 1.6배 자주 떠남).
+    """
+    got = get_analysis("screen_flow")(_cubes())
+    assert {"exit_baseline", "exit_lift"} <= set(got.frame.columns)
+    row = got.frame.set_index("state")
+    assert row.loc["A", "exit_baseline"] == pytest.approx(0.625)
+    assert row.loc["B", "exit_baseline"] == pytest.approx(0.625)
+    assert row.loc["A", "exit_lift"] == pytest.approx(0.64)
+    assert row.loc["B", "exit_lift"] == pytest.approx(1.6)
+
+
 def test_thin_cells_are_flagged_in_the_envelope_warnings():
     """엣지 셀의 cnt 중앙값은 9고 18.9%는 1이다 — 얇은 셀 경고가 붙어야 한다."""
     thin = _cubes(CHAIN + [("A", "C", 1, 1), ("C", "EXIT", 1, 1)])
