@@ -103,6 +103,7 @@ def _shipped_analyses() -> list[str]:
 # 화면층 분석이 이 이유로 조용히 빠지면 그 테스트가 실패한다.
 ACTION_LAYER_REQUIRES = {
     "click_distribution": "action",
+    "community_paths": "path",
     "conditional_flow": "cond_transition",
     "path_ranking": "path",
     "markov_order_test": "path",
@@ -135,8 +136,9 @@ def test_only_the_action_layer_analyses_are_skipped(real_cubes, real_results):
 def test_the_shipped_registry_is_what_it_should_be():
     """분석이 추가·삭제되면 여기서 눈에 띈다."""
     assert _shipped_analyses() == [
-        "click_distribution", "conditional_flow", "cross_service_flow",
-        "hub_neighbors", "markov_order_test", "path_ranking", "quality_report",
+        "click_distribution", "community_paths", "conditional_flow",
+        "cross_service_flow", "hub_neighbors", "markov_order_test",
+        "path_ranking", "quality_report",
         "reachability", "screen_communities", "screen_dwell_rank", "screen_flow",
         "screen_pair_affinity", "screen_transition", "session_trend",
     ]

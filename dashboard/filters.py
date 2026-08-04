@@ -12,8 +12,10 @@ from analytics.analyses.cubes import (
 from data_layer.config import Config
 
 # path·action·cond_transition 을 쓰는 분석. markov 는 transition 도 쓰므로 전부 싣는다.
+# community_paths 도 마찬가지다 — 군집은 transition 에서, 5-gram 은 path 에서 온다.
 ACTION_ANALYSES = frozenset(
-    {"click_distribution", "conditional_flow", "path_ranking", "markov_order_test"}
+    {"click_distribution", "conditional_flow", "path_ranking", "markov_order_test",
+     "community_paths"}
 )
 
 # app.py 가 사이드바 위젯으로 채우는 축들.

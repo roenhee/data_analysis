@@ -12,6 +12,7 @@ from analytics.analyses.base import (
 )
 from analytics.metrics.coverage import dwell_coverage
 from analytics.metrics.markov import EXIT, START
+from analytics.metrics.paths import OTHER_PATH, top_paths
 
 # Louvain 은 무작위 초기화가 있다. 시드가 발행물의 재현성을 결정하므로 상수로 박는다.
 DEFAULT_SEED = 0
@@ -107,4 +108,64 @@ def screen_communities(cubes: CubeSet, seed: int = DEFAULT_SEED,
         envelope=envelope_for(cubes, {"dwell": dwell_coverage(edges)}),
         viz={"kind": "graph", "x": "state", "group": "community",
              "edges": [[u, v, float(w)] for u, v, w in graph.edges(data="weight")]},
+    )
+
+
+@analysis("community_paths")
+def community_paths(cubes: CubeSet, seed: int = DEFAULT_SEED,
+                    resolution: float = 1.0, top_per_community: int = 10,
+                    **_) -> AnalysisResult:
+    """군집별 대표 5-gram 경로. 노트북 `*_comm_top5.csv` 재현.
+
+    `screen_communities` 로 상태→군집을 얻고, path 큐브 n=5 경로 중 **다섯 상태가 모두
+    같은 군집**인 것만 남겨 군집별 상위 `top_per_community` 개로 순위 매긴다.
+    `support_in_comm` 은 그 군집 안 5-gram 물량 대비 비중이다.
+
+    **자기 루프 주의:** 이 프로젝트 path 큐브는 노트북의 연속중복 제거(dedup_consecutive)를
+    하지 않아 `a>a>b>c>d` 같은 자기 루프가 5-gram 에 남는다 — 노트북 표와 상위 경로가 다를
+    수 있고, dedup 은 큐브 재빌드가 필요하다. 또 path 큐브는 세그먼트×n 마다 상위 200 컷이
+    있어 이 순위는 그 생존 경로 위에서 성립한다.
+    """
+    if cubes.path is None:
+        raise ValueError("community_paths needs the path cube; it is absent")
+    if cubes.transition is None:
+        raise ValueError(
+            "community_paths needs the transition cube for the communities; it is absent")
+    comm = screen_communities(cubes, seed=seed, resolution=resolution)
+    state_comm = dict(zip(comm.frame["state"], comm.frame["community"]))
+
+    kept = top_paths(cubes.path, n=5)
+    kept = kept[kept["path"] != OTHER_PATH]
+    rows = []
+    for row in kept.itertuples():
+        states = str(row.path).split(">")
+        if len(states) != 5:
+            continue
+        groups = {state_comm.get(s) for s in states}
+        if len(groups) == 1 and None not in groups:
+            rows.append({"community": next(iter(groups)),
+                         "path": row.path, "cnt": float(row.cnt)})
+    within = len(rows)
+    frame = pd.DataFrame(rows, columns=["community", "path", "cnt"])
+    if not frame.empty:
+        frame["support_in_comm"] = (
+            frame["cnt"] / frame.groupby("community")["cnt"].transform("sum"))
+        frame = frame.sort_values(["community", "cnt"],
+                                  ascending=[True, False], ignore_index=True)
+        frame["rank"] = frame.groupby("community").cumcount() + 1
+        frame = frame[frame["rank"] <= int(top_per_community)].reset_index(drop=True)
+        frame = frame[["community", "rank", "path", "cnt", "support_in_comm"]]
+    else:
+        frame = pd.DataFrame(
+            columns=["community", "rank", "path", "cnt", "support_in_comm"])
+
+    headline = {
+        "communities_covered": float(frame["community"].nunique()) if not frame.empty else 0.0,
+        "within_community_5grams": float(within),
+        "top_support": float(frame["support_in_comm"].max()) if not frame.empty else float("nan"),
+    }
+    return AnalysisResult(
+        frame=frame, headline=headline, compare_key=None,
+        envelope=envelope_for(cubes, {}, []),
+        viz={"kind": "table"},
     )
