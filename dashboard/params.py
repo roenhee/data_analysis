@@ -39,3 +39,31 @@ def params_for(analysis: str) -> list[Param]:
 
 def required_names(analysis: str) -> list[str]:
     return [p.name for p in params_for(analysis) if p.required]
+
+
+def coerce(analysis: str, raw_params: dict) -> dict:
+    """위젯이 모은 문자열 파라미터를 분석 계약의 타입으로 바꾼다.
+
+    빈 값은 빼서 분석 함수의 기본값을 쓰게 한다(대시보드가 기본을 복제하지 않는다).
+    kind 별: int→int, float→float, choice→tuple(콤마 분리), pair→(int, ...), 그 외 문자열.
+    """
+    specs = {p.name: p for p in params_for(analysis)}
+    out: dict = {}
+    for name, raw in raw_params.items():
+        if raw == "" or raw is None:
+            continue
+        kind = specs[name].kind if name in specs else "str"
+        out[name] = _coerce_one(kind, raw)
+    return out
+
+
+def _coerce_one(kind: str, raw):
+    if kind == "int":
+        return int(raw)
+    if kind == "float":
+        return float(raw)
+    if kind == "choice":
+        return tuple(str(raw).split(","))
+    if kind == "pair":
+        return tuple(int(x) for x in str(raw).split(","))
+    return raw

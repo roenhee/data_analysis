@@ -68,7 +68,7 @@ def _sidebar(state: dict) -> dict:
             raw = st.sidebar.text_input(
                 f"{p.name}{' *' if p.required else ''}", current)
             if raw:
-                values[p.name] = int(raw) if p.kind == "int" else raw
+                values[p.name] = raw
     state["params"] = values
     return state
 
@@ -82,7 +82,8 @@ def _run(state: dict):
         return None
     cubes = filters.load_for(Config.from_env(), state, state["analysis"],
                              STATE_DICT_VERSION)
-    return get_analysis(state["analysis"])(cubes, **state["params"])
+    call_params = params.coerce(state["analysis"], state["params"])
+    return get_analysis(state["analysis"])(cubes, **call_params)
 
 
 def _draw(result, top: int):
