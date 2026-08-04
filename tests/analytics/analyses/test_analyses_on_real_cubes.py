@@ -136,9 +136,9 @@ def test_the_shipped_registry_is_what_it_should_be():
     """분석이 추가·삭제되면 여기서 눈에 띈다."""
     assert _shipped_analyses() == [
         "click_distribution", "conditional_flow", "cross_service_flow",
-        "quality_report", "reachability", "screen_communities",
-        "screen_dwell_rank", "screen_flow", "screen_pair_affinity",
-        "session_trend",
+        "markov_order_test", "path_ranking", "quality_report", "reachability",
+        "screen_communities", "screen_dwell_rank", "screen_flow",
+        "screen_pair_affinity", "session_trend",
     ]
 
 

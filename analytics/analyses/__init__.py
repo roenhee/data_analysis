@@ -17,6 +17,7 @@ from analytics.analyses import (  # noqa: E402,F401  (등록 부작용)
     communities,
     descriptive,
     flow,
+    paths,
     quality,
 )
 

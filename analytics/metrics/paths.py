@@ -54,7 +54,11 @@ def top_paths(paths: pd.DataFrame, n: int) -> pd.DataFrame:
     """
     rows = _one_n(paths, n)
     total = float(rows["cnt"].sum())
-    out = rows[rows["path"] != OTHER_PATH].copy()
+    # 큐브는 세그먼트(축 조합)별로 쪼개져 있고 전체 rollup 행이 없다 — 같은 경로가 os·성별·
+    # 버전마다 다른 행이다. 순위·비중을 내기 전에 경로로 합친다. `total` 은 컷 이전 전체
+    # (세그먼트 조각과 `(other)` 를 포함한 합)이므로 세그먼트 집계와 무관하게 옳다.
+    out = (rows[rows["path"] != OTHER_PATH]
+           .groupby("path", as_index=False)["cnt"].sum())
     out["share"] = out["cnt"] / total if total > 0 else float("nan")
     out = out.sort_values("cnt", ascending=False, ignore_index=True)
     coverage = path_coverage(paths, n)
