@@ -11,17 +11,18 @@ DEFAULTS: dict = {
     "analysis": "session_trend",
     "dates": [],          # [] 이면 present_dates 전체 (filters 에서 채움)
     "services": [],       # [] 이면 빌드된 전체
-    "service_type": "",   # "" 이면 전체 (필터 안 함)
-    "app_version": "",
-    "os": "",
-    "gender": "",
-    "age_band": "",
-    "daypart": "",
+    "service_type": [],   # [] 이면 전체 (필터 안 함). 다중 선택이라 리스트다.
+    "app_version": [],
+    "os": [],
+    "gender": [],
+    "age_band": [],
+    "daypart": [],
     "params": {},         # 분석별 파라미터
     "top": 10,
 }
 
-_LIST_KEYS = ("services",)
+_LIST_KEYS = ("services", "service_type", "app_version", "os", "gender",
+              "age_band", "daypart")
 _RANGE_KEYS = ("dates",)
 _INT_KEYS = ("top",)
 

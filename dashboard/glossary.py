@@ -106,6 +106,10 @@ COLUMNS: dict[str, tuple[str, str]] = {
     "sessions": ("세션 수", "방문(세션)의 수입니다."),
     "events": ("이벤트 수", "기록된 이벤트의 총수입니다."),
     "duration_sum": ("체류합(초)", "체류시간의 총합(초)입니다."),
+    "sessions_per_user": ("사용자당 세션", "한 사람이 기간 안에 평균 몇 번 방문하는지입니다."),
+    "pv_per_session": ("세션당 페이지뷰", "한 번 방문에 평균 몇 개 화면을 보는지입니다."),
+    "seconds_per_session": ("세션당 체류(초)", "한 번 방문이 평균 몇 초 이어지는지입니다."),
+    "dwell_definition": ("체류 정의", "이 체류시간이 어떻게 잰 값인지입니다(세션 구간/화면 체류)."),
     "seconds_per_visit": ("방문당 체류(초)", "화면 한 번 방문당 평균 체류(초)입니다."),
     "dwell_coverage": ("체류 커버리지", "체류가 실제로 기록된 방문의 비율입니다."),
     "check_name": ("검사", "품질 검사의 종류입니다."),
@@ -183,6 +187,8 @@ VALUES: dict[str, str] = {
     "ViewContent": "콘텐츠 조회",
     "Share": "공유",
     "Like": "좋아요",
+    "session_span_seconds": "세션 구간(첫~마지막 이벤트)",
+    "usage_page_seconds": "화면 체류(UsagePage)",
 }
 
 # 세그먼트 축 → (한글 이름, 마우스오버 설명)

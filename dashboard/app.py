@@ -94,7 +94,7 @@ def _seed_from_url() -> None:
     st.session_state["w_tab"] = TAB_LABELS[safe_tab(s["tab"], keys)]
     st.session_state["w_dates"] = ":".join(s["dates"]) or DEFAULT_DATES
     for axis in filters.SEGMENT_AXES:
-        st.session_state[f"w_{axis}"] = s.get(axis, "")
+        st.session_state[f"w_{axis}"] = list(s.get(axis, []))
     st.session_state["w_top"] = int(s["top"])
     st.session_state["_url_analysis"] = s["analysis"]
     st.session_state["_url_params"] = s["params"]
@@ -212,25 +212,24 @@ def main():
     opts = _axis_options()
     axes = {}
     for a in filters.SEGMENT_AXES:
-        choices = [""] + opts.get(a, [])
-        # 시드값이 목록에 없으면(옛 URL 등) '전체'로 떨궈 selectbox 크래시를 막는다.
-        if st.session_state.get(f"w_{a}", "") not in choices:
-            st.session_state[f"w_{a}"] = ""
-        axes[a] = st.sidebar.selectbox(
+        choices = opts.get(a, [])
+        # 시드값 중 목록에 없는 건 버린다(옛 URL 등). 비우면 전체.
+        st.session_state[f"w_{a}"] = [
+            v for v in st.session_state.get(f"w_{a}", []) if v in choices]
+        axes[a] = st.sidebar.multiselect(
             glossary.axis_label(a), choices, key=f"w_{a}",
             format_func=lambda v, ax=a: glossary.axis_value_label(ax, v),
-            help=glossary.axis_help(a))
+            help=glossary.axis_help(a) + " (여러 개 선택 가능, 비우면 전체)")
     st.sidebar.markdown("---")
     analysis = _analysis_widget(tab)
     param_values = _param_widgets(analysis)
-    top = st.number_input("표시 개수", min_value=0, key="w_top")
 
     state = {
         "mode": "single", "tab": tab, "analysis": analysis,
         "dates": [d for d in dates.split(":") if d],
         "services": list(services),
         **{a: axes[a] for a in filters.SEGMENT_AXES},
-        "params": param_values, "top": int(top),
+        "params": param_values, "top": int(st.session_state.get("w_top", 10)),
     }
 
     result = _run(state)
@@ -239,9 +238,11 @@ def main():
         desc = glossary.analysis_desc(analysis)
         if desc:
             st.caption(desc)
-        _draw(result, state["top"])
-        st.caption(f"표시 {min(state['top'], len(result.frame))} / "
-                   f"전체 {len(result.frame)}개")
+        total = len(result.frame)
+        top = st.number_input(
+            f"표시 개수 (전체 {total:,}개 중)", min_value=0, key="w_top")
+        state["top"] = int(top)
+        _draw(result, top)
 
     # URL 을 매 실행 통째로 덮어쓰면(from_dict) 위젯이 리셋되어 클릭 전환이 막힌다.
     # 자동 갱신을 빼고, 현재 화면을 재현하는 공유 링크를 사이드바에 낸다 — 그 링크로

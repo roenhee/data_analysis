@@ -7,8 +7,17 @@ def test_defaults_round_trip():
 
 
 def test_scalar_round_trip():
-    state = {**DEFAULTS, "analysis": "screen_flow", "service_type": "MA", "top": 25}
+    state = {**DEFAULTS, "analysis": "screen_flow", "top": 25}
     assert decode_state(encode_state(state)) == state
+
+
+def test_axis_list_round_trips_as_csv():
+    """세그먼트 축은 다중 선택이라 리스트로 왕복한다(services 와 같은 방식)."""
+    state = {**DEFAULTS, "os": ["android", "ios"], "gender": ["F"]}
+    encoded = encode_state(state)
+    assert encoded["os"] == "android,ios"
+    assert decode_state(encoded)["os"] == ["android", "ios"]
+    assert decode_state(encoded)["gender"] == ["F"]
 
 
 def test_services_list_round_trips_as_csv():
