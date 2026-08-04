@@ -63,6 +63,19 @@ def _load_scope(dates: tuple, services: tuple, analysis: str):
     )
 
 
+@st.cache_data(show_spinner="세그먼트 값 읽는 중…")
+def _axis_options() -> dict:
+    """세그먼트 축의 실제 값 목록을 세션 큐브에서 뽑는다(드롭다운용). 캐시된다."""
+    cubes = load_cube_set(
+        Config.from_env(),
+        dates=filters.expand_dates(DEFAULT_DATES.split(":")),
+        services=SERVICES, state_dict_version=STATE_DICT_VERSION,
+        cube_names=("session",))
+    s = cubes.session
+    return {a: [str(v) for v in sorted(s[a].dropna().unique())]
+            for a in filters.SEGMENT_AXES}
+
+
 def safe_tab(tab: str, valid: list[str]) -> str:
     """알 수 없는 tab(손댄 URL)은 기본 탭으로 떨군다 — 크래시 대신."""
     return tab if tab in valid else "overview"
@@ -147,9 +160,16 @@ def _draw(result, top: int) -> None:
                    help=glossary.metric_help(key) or None)
 
     frame = render.table_slice(result.frame, top)
-    display = frame.rename(columns={c: glossary.column_label(c)
-                                    for c in frame.columns})
-    st.dataframe(display, use_container_width=True)
+    display = frame.copy()
+    for c in display.columns:
+        if display[c].dtype == object:
+            display[c] = display[c].map(
+                lambda v: glossary.value_label(v) if isinstance(v, str) else v)
+    st.dataframe(
+        display, use_container_width=True,
+        column_config={c: st.column_config.Column(
+            glossary.column_label(c), help=glossary.column_help(c) or None)
+            for c in display.columns})
 
     kind = charts.chart_kind(result.viz)
     x = result.viz.get("x")
@@ -165,7 +185,8 @@ def _draw(result, top: int) -> None:
         st.dataframe(charts.heatmap_pivot(result.frame, x, to, "cnt"))
 
     env = render.envelope_summary(result.envelope)
-    st.caption(f"⚠ {', '.join(env['warnings']) or '경고 없음'} · "
+    warns = [glossary.warning_label(w) for w in env["warnings"]]
+    st.caption(f"⚠ {', '.join(warns) or '경고 없음'} · "
                f"사전 {env['state_dict_version']} · 날짜 {env['n_dates']}일")
 
 
@@ -188,7 +209,17 @@ def main():
         help="큐브가 6서비스로 한 번 빌드돼 있어 부분 선택은 안 됩니다. 서비스별로 보려면 "
              "그 서비스로 큐브를 빌드하거나 per_service 분석(후속)을 씁니다.")
     services = list(SERVICES)
-    axes = {a: st.sidebar.text_input(a, key=f"w_{a}") for a in filters.SEGMENT_AXES}
+    opts = _axis_options()
+    axes = {}
+    for a in filters.SEGMENT_AXES:
+        choices = [""] + opts.get(a, [])
+        # 시드값이 목록에 없으면(옛 URL 등) '전체'로 떨궈 selectbox 크래시를 막는다.
+        if st.session_state.get(f"w_{a}", "") not in choices:
+            st.session_state[f"w_{a}"] = ""
+        axes[a] = st.sidebar.selectbox(
+            glossary.axis_label(a), choices, key=f"w_{a}",
+            format_func=lambda v, ax=a: glossary.axis_value_label(ax, v),
+            help=glossary.axis_help(a))
     st.sidebar.markdown("---")
     analysis = _analysis_widget(tab)
     param_values = _param_widgets(analysis)
@@ -204,7 +235,7 @@ def main():
 
     result = _run(state)
     if result is not None:
-        st.subheader(analysis)
+        st.subheader(glossary.analysis_label(analysis))
         desc = glossary.analysis_desc(analysis)
         if desc:
             st.caption(desc)
