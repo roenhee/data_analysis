@@ -7,8 +7,9 @@ render/charts 로 그린다. 상태는 URL query params 에 있어 공유 URL �
 때 session_state 를 시드하고, 매 실행 끝에 현재 상태로 갱신된다 — 그래서 클릭으로도
 URL 로도 전환되고, 주소를 공유하면 화면이 재현된다.
 
-큐브 로드는 @st.cache_data 로 캐시해 세션끼리 공유한다 — 사내망에서 여러 명이 붙어도
-같은 (기간·서비스·분석)은 한 번만 읽는다.
+큐브 로드는 @st.cache_resource 로 캐시해 세션끼리 공유한다 — 사내망에서 여러 명이 붙어도
+같은 (기간·서비스·큐브목록)은 한 번만 읽는다. cache_data 는 반환값을 매번 복사·직렬화해
+4 GB path 큐브에서 스트림릿을 멈춰 세웠다(cache_resource 는 같은 객체를 복사 없이 돌려준다).
 
 실행: .venv/bin/streamlit run dashboard/app.py  (프로젝트 루트에서)
 """
@@ -48,19 +49,26 @@ SERVICES = ["top", "media", "entertain", "sports", "content_v", "search"]
 DEFAULT_DATES = "2026-07-14:2026-07-28"
 
 
-@st.cache_data(show_spinner="큐브 로딩…", max_entries=8)
-def _load_scope(dates: tuple, services: tuple, analysis: str):
-    """(기간·서비스·분석)으로 큐브를 로드한다 — 무거우니 캐시해 세션끼리 공유한다.
+@st.cache_resource(show_spinner="큐브 로딩…", max_entries=6)
+def _load_scope(dates: tuple, services: tuple, cube_names: tuple):
+    """(기간·서비스·큐브목록)으로 큐브를 로드한다 — 무거우니 캐시해 세션끼리 공유한다.
 
-    세그먼트 축 필터(apply_segment)는 값이 세션마다 달라 여기서 하지 않는다 —
-    캐시 히트율을 높이려고 스코프(빌드 범위)만 캐시하고 축 필터는 호출부에서 건다.
+    **`@st.cache_resource` 다(`cache_data` 아님).** cache_data 는 반환값을 매번 복사·
+    직렬화하는데 `path` 큐브는 pandas 약 4 GB 라 그 복사가 스트림릿을 멈춰 세운다(관측:
+    프로세스 10 GB·CPU 0%·"큐브 로딩…" 무한 스피너). cache_resource 는 같은 객체를 그대로
+    돌려줘 복사가 없다 — 큐브는 읽기 전용이라 안전하다(분석은 순수 함수, apply_segment 는
+    새 프레임을 만든다).
+
+    캐시 키를 분석 이름이 아니라 **큐브목록**으로 잡아, 같은 큐브를 쓰는 분석들이(path 를
+    쓰는 community_paths·path_ranking·markov_order_test) 4 GB 로드를 하나로 공유한다.
+    세그먼트 축 필터(apply_segment)는 세션마다 달라 여기서 하지 않고 호출부에서 건다.
     """
     return load_cube_set(
         Config.from_env(),
         dates=filters.expand_dates(list(dates)),
         services=list(services),
         state_dict_version=STATE_DICT_VERSION,
-        cube_names=filters.cube_names_for(analysis),
+        cube_names=tuple(cube_names),
     )
 
 
@@ -145,8 +153,10 @@ def _run(state: dict):
     if missing:
         st.warning(f"필수 파라미터를 입력하세요: {', '.join(missing)}")
         return None
+    # 큐브목록을 정렬해 키를 정규화한다 — ("path","transition") 과 ("transition","path")
+    # 가 같은 캐시 항목이 되어, 둘 다 쓰는 분석들이 4 GB path 로드를 공유한다.
     cubes = _load_scope(tuple(state["dates"]), tuple(state["services"]),
-                        state["analysis"])
+                        tuple(sorted(filters.cube_names_for(state["analysis"]))))
     cubes = filters.apply_segment(cubes, state)
     call_params = params.coerce(state["analysis"], state["params"])
     return get_analysis(state["analysis"])(cubes, **call_params)
