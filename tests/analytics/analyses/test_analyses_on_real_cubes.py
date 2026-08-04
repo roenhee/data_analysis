@@ -350,6 +350,29 @@ def test_the_service_mix_shows_the_pooled_number_is_mostly_top(real_results):
 
 
 @needs_cubes
+def test_exit_lift_is_visit_weighted_normalized_to_one(real_results):
+    """`exit_lift` = 화면 이탈률 / 방문 가중 평균 이탈률(baseline, 노트북 `lift_exit`).
+
+    baseline 은 모든 화면에 같은 상수(방문 가중 평균 이탈률)라야 한다. 방문 가중으로
+    `exit_lift` 를 다시 평균하면 baseline 이 곧 그 평균이므로 정확히 1이어야 하고,
+    어느 화면은 평균보다 더 자주 떠나야(`exit_lift > 1`) 이 지표가 뜻이 있다 — 전부
+    1 근처면 baseline 과 다를 게 없다.
+    """
+    frame = real_results["screen_flow"].frame
+    assert {"exit_baseline", "exit_lift"} <= set(frame.columns)
+
+    assert frame["exit_baseline"].nunique() == 1, "baseline 은 화면마다 같은 상수여야 한다"
+    baseline = float(frame["exit_baseline"].iloc[0])
+    assert baseline == pytest.approx(
+        real_results["screen_flow"].headline["mean_exit_prob"]
+    )
+    assert (frame["exit_lift"] > 1).any(), "평균보다 더 자주 떠나는 화면이 하나는 있어야 한다"
+
+    weights = frame["visits"] / frame["visits"].sum()
+    assert (frame["exit_lift"] * weights).sum() == pytest.approx(1.0)
+
+
+@needs_cubes
 def test_cross_service_movement_is_about_half_of_screen_transitions(real_results):
     """감춰져 있던 절반. `screen_flow` 는 화면 단위라 이걸 못 보여준다.
 

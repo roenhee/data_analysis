@@ -100,12 +100,19 @@ def screen_flow(cubes: CubeSet, exit_within: tuple[int, ...] = (),
             (frame["expected_steps"] * weights).sum()
         )
         headline["mean_exit_prob"] = float((frame["exit_prob"] * weights).sum())
+        # 이탈 lift: 각 화면 이탈률이 방문 가중 평균의 몇 배인가(노트북 lift_exit).
+        baseline = headline["mean_exit_prob"]
+        frame["exit_baseline"] = baseline
+        frame["exit_lift"] = (frame["exit_prob"] / baseline
+                              if baseline > 0 else float("nan"))
         for k in exit_within:
             headline[f"mean_p_exit_within_{k}"] = float(
                 (frame[f"p_exit_within_{k}"] * weights).sum()
             )
     else:
         headline["mean_expected_steps"] = headline["mean_exit_prob"] = float("nan")
+        frame["exit_baseline"] = float("nan")
+        frame["exit_lift"] = float("nan")
 
     return AnalysisResult(
         frame=frame, headline=headline,
