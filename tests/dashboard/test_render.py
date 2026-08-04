@@ -17,6 +17,12 @@ def test_headline_cards_skip_nan():
     assert cards == [("sessions", "1,000")]
 
 
+def test_headline_cards_shows_infinity():
+    """screen_flow 의 기대 걸음 수는 이탈 못하는 화면이 있으면 inf 다 — 크래시가 아니라 표시해야 한다."""
+    assert headline_cards({"mean_expected_steps": float("inf")}) == [("mean_expected_steps", "∞")]
+    assert headline_cards({"x": float("-inf")}) == [("x", "-∞")]
+
+
 def test_table_slice_takes_top_n():
     frame = pd.DataFrame({"x": range(50)})
     assert len(table_slice(frame, 10)) == 10

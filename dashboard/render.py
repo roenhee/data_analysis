@@ -17,7 +17,9 @@ def headline_cards(headline: dict) -> list[tuple[str, str]]:
 
 
 def _fmt(value: float) -> str:
-    """정수 같은 큰 수는 천단위 콤마, 소수는 2자리."""
+    """정수 같은 큰 수는 천단위 콤마, 소수는 2자리. 무한대는 ∞ 로."""
+    if math.isinf(value):
+        return "∞" if value > 0 else "-∞"
     if abs(value - round(value)) < 1e-9:
         return f"{int(round(value)):,}"
     return f"{value:.2f}"
