@@ -1,6 +1,6 @@
 ---
 name: basic-analysis
-description: Use when someone wants full-population analytics on the data_analysis project — 기간별 UV/PV (unique visitors / page views), 세션 수, 체류시간(dwell time), 유저당 세션·체류, 화면 전이 마르코프 지표 (전이확률·이탈확률·stationary·기대 걸음 수·흡수확률·PMI·엔트로피·PageRank), 화면 군집, 도달 확률, 서비스 간 이동 — segmented by app_version / os / gender / age_band / daypart / service_type, and 세그먼트 비교(compare)·구성 분해(decompose)·서비스별 분해(per_service). Reads pre-built local cubes; never queries Trino directly.
+description: Use when someone wants full-population analytics on the data_analysis project — 기간별 UV/PV (unique visitors / page views), 세션 수, 체류시간(dwell time), 유저당 세션·체류, 화면 전이 마르코프 지표 (전이확률·이탈확률·stationary·기대 걸음 수·흡수확률·PMI·엔트로피·PageRank), 화면 군집, 도달 확률, 서비스 간 이동, 화면 안 클릭 분포·행동별 다음 화면·n-그램 경로 순위·1차 마르코프 가정 검정 — segmented by app_version / os / gender / age_band / daypart / service_type, and 세그먼트 비교(compare)·구성 분해(decompose)·서비스별 분해(per_service). Reads pre-built local cubes; never queries Trino directly.
 ---
 
 # Basic Analysis
@@ -15,7 +15,7 @@ Two layers, and you work in the upper one:
 | 층 | 무엇 | 누가 쓰나 |
 |---|---|---|
 | `analytics/metrics/` | 순수 프리미티브 (행렬·비율·커버리지) | 분석이 쓴다 |
-| `analytics/analyses/` | **이름 붙은 분석 6개 + 연산자 2개** | 여기서 고른다 |
+| `analytics/analyses/` | **이름 붙은 분석 12개 + 연산자 3개** | 여기서 고른다 |
 
 **Claude 는 계산하지 않는다.** 이름 붙은 분석을 고르고, 연산자를 걸고, 나온 숫자를
 말로 해석한다. 탐색은 자유롭지만 **발행되지 않는다** — 발행하려면 분석으로 코드화한다.
@@ -91,6 +91,10 @@ partition.
 | `reachability` | transition | k 걸음 안에 목표 화면에 닿을 확률 곡선 | `p_hit_within_{max_k}` | `source`·`target`·`max_k` **(필수)** |
 | `screen_communities` | transition | 화면 군집 (Louvain) | `communities`·`modularity` | `seed`·`resolution` |
 | `quality_report` | quality | 검사별·날짜별 위반 비율 | `worst_{검사}`·`exit_corroboration` | `thresholds` |
+| `click_distribution` | action | 화면별 `by` 조합 클릭 건수·**화면 안** 비중 | `clicks`·`clicks_per_visit`·`unattributed_share` | `by` (기본 `action_kind`) |
+| `conditional_flow` | cond_transition | (현재 화면, 행동, 다음 화면)별 건수·`share_of_origin` | `action_information`·`no_click_share` | — |
+| `path_ranking` | path | `n` 걸음 경로 순위 (`(other)` 제외, **세그먼트 합산**) | `coverage`·`paths`·`top_path_share` | `n` **(필수)** |
+| `markov_order_test` | path + transition | 3-gram 문맥별 1차 예측과의 KL 발산 | `excess_information`·`diverging_context_share`·`coverage` | — |
 
 `headline` 이 있어야 연산자가 걸린다. 새 분석을 만들 때 `headline` 을 비우면 그 분석만
 비교에서 빠진다.
@@ -120,7 +124,7 @@ partition.
 경고와 같은 곳을 가리킨다. 하위권은 서비스를 건너뛰는 쌍(media↔top, media↔sports)으로
 PMI −11~−15.5 다.
 
-### 실측 규모 (15일치 · 전이 3,279,905 / 세션 214,668 / 품질 251,822 행)
+### 실측 규모 (15일치 · 전이 3,279,905 / 세션 214,668 / 품질 251,822 / action 9,291,391 / cond_transition 352,657 / path 19,291,345 행)
 
 | 분석 | 프레임 | 소요 | 대표값 |
 |---|---|---|---|
@@ -132,9 +136,20 @@ PMI −11~−15.5 다.
 | `per_service` (연산자) | — | 1.9s | 서비스별로 분석을 다시 돌린다 |
 | `screen_communities` | 15행 × 4열 | 0.48s | 군집 3개, modularity 0.394 |
 | `quality_report` | 120행 × 5열 | 0.36s | 이탈 뒷받침 89.2%, 화면 커버리지 78.0% |
+| `click_distribution` | 111행 × 4열 | 0.8s | 방문당 클릭 0.61, 미귀속 1.64% |
+| `conditional_flow` | 1,338행 × 5열 | 0.2s | 행동 정보량 0.162 nats, 무클릭 59.0% |
+| `path_ranking` (n=3) | 2,352행 × 3열 | 1.4s | 커버리지 0.986, 최빈 경로 6.4% |
+| `markov_order_test` | 207행 × 4열 | 7.4s | 초과 정보량 0.504 nats — 1차 가정이 약하다 |
 | `compare` (15일, 두 세그먼트) | — | 5.8s | 날짜별로 분석을 다시 돌리므로 가장 비싸다 |
 
-화면이 15개뿐이라 프레임이 작다. 비용은 프레임 크기가 아니라 **큐브 행 수**에서 온다.
+화면이 15개뿐이라 프레임이 작다. 비용은 프레임 크기가 아니라 **큐브 행 수**에서 온다 —
+`markov_order_test` 가 7.4s 로 가장 느린 것은 `path` 큐브 1,929만 행을 훑기 때문이다.
+
+**`path` 큐브는 통째로 올리면 pandas 메모리 약 4 GB다.** 로딩은 0.5s 로 빠르지만 메모리가
+크니 큰 세그먼트는 `filter` 로 먼저 좁혀 부른다. 경로 큐브는 세그먼트(축 조합)별로 상위
+200 만 남기고 rollup 행이 없어서, `path_ranking`·`markov_order_test` 는 경로를 키로 세그먼트를
+합쳐 낸다 — 합치지 않으면 조각을 세어 순위·확률이 조용히 틀린다
+(→ `measurements/2026-08-04-path-analysis-and-segment-aggregation.md`).
 
 ## 연산자 — 가드가 모여 있는 곳
 
@@ -188,6 +203,18 @@ b.pooled                # 합산 headline
 b.outside_range         # 합산이 서비스별 범위 밖인 headline 키 -> {키: (최소, 최대)}
 b.cross_service_share   # 서비스별로 자를 때 사라진 전이 비중 (실측 0.4968)
 b.frame["other_share"]  # 그 서비스의 `/other` 비중 — 지표 옆에서 함께 읽는다
+
+# 행동층 분석은 큐브를 명시해서 부른다 — `path` 는 15일 1,929만 행(pandas 약 4 GB)이라
+# 기본 목록에 없다. 큰 큐브는 세그먼트를 먼저 좁혀 메모리를 줄인다.
+from analytics.analyses.cubes import ALL_CUBE_NAMES
+
+action_cubes = load_cube_set(
+    config, dates=["2026-07-26", "2026-07-27", "2026-07-28"],
+    services=["top", "media"], state_dict_version="sd_2ab5ec25e750dda2",
+    cube_names=ALL_CUBE_NAMES,           # action·cond_transition·path 까지 — 기본은 셋만
+)
+mk = get_analysis("markov_order_test")(action_cubes.filter(service_type="MA"))
+mk.headline["excess_information"]        # 실측 0.504 nats — 1차 가정이 약하다는 판정
 
 publish(config, flow, run_id="r1", analysis_type="screen_flow", title="MA 화면 흐름")
 ```
