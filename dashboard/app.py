@@ -3,9 +3,16 @@
 숫자는 analytics/analyses/ 에서만 온다. 이 파일은 위젯으로 상태를 받아 분석을 부르고
 render/charts 로 그린다. 상태는 URL query params 에 있어 공유 URL 이 화면을 재현한다.
 
-실행: PYTHONPATH=. .venv/bin/streamlit run dashboard/app.py
+실행: .venv/bin/streamlit run dashboard/app.py  (프로젝트 루트에서)
 """
 from __future__ import annotations
+
+import os
+import sys
+
+# streamlit run 은 스크립트 디렉토리(dashboard/)만 sys.path 에 넣어 analytics 를 못 찾는다.
+# 프로젝트 루트를 직접 얹어 PYTHONPATH 없이도 돌게 한다.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 import streamlit as st
