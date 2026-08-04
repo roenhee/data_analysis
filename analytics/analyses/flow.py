@@ -229,6 +229,35 @@ def screen_pair_affinity(cubes: CubeSet, **_) -> AnalysisResult:
     )
 
 
+@analysis("screen_transition")
+def screen_transition(cubes: CubeSet, **_) -> AnalysisResult:
+    """화면 사이 전이확률 행렬. P(다음 화면 | 현재 화면) 을 히트맵으로 본다.
+
+    `screen_pair_affinity` 가 PMI(우연 대비 결합 강도)를 내는 것과 다르다 — 여기는
+    '현재 화면에서 다음으로 갈 확률' 그 자체다. 관측된 전이(cnt>0)만 낸다.
+    """
+    edges = cubes.transition
+    if edges is None:
+        raise ValueError("screen_transition needs the transition cube; it is absent")
+    P = transition_matrix(edges)
+    rows = []
+    for i, fr in enumerate(P.states):
+        for j, to in enumerate(P.states):
+            if P.counts[i][j] > 0:
+                rows.append({"from_state": fr, "to_state": to,
+                             "prob": float(P.matrix[i][j]),
+                             "cnt": float(P.counts[i][j])})
+    frame = pd.DataFrame(
+        rows, columns=["from_state", "to_state", "prob", "cnt"]
+    ).sort_values("cnt", ascending=False, ignore_index=True)
+    headline = {"pairs": float(len(frame)), "states": float(len(P.states))}
+    return AnalysisResult(
+        frame=frame, headline=headline, compare_key=None,
+        envelope=envelope_for(cubes, {}, _thin_cell_warning(edges)),
+        viz={"kind": "heatmap", "x": "from_state", "value": "prob"},
+    )
+
+
 @analysis("cross_service_flow")
 def cross_service_flow(cubes: CubeSet, **_) -> AnalysisResult:
     """서비스 사이의 이동. **화면 간 전이의 절반이 여기 있다.**

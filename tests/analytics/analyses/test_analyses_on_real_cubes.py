@@ -138,7 +138,7 @@ def test_the_shipped_registry_is_what_it_should_be():
         "click_distribution", "conditional_flow", "cross_service_flow",
         "markov_order_test", "path_ranking", "quality_report", "reachability",
         "screen_communities", "screen_dwell_rank", "screen_flow",
-        "screen_pair_affinity", "session_trend",
+        "screen_pair_affinity", "screen_transition", "session_trend",
     ]
 
 

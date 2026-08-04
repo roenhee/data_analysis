@@ -35,7 +35,7 @@ STATE_DICT_VERSION = "sd_2ab5ec25e750dda2"
 TABS = {
     "overview": ["session_trend"],
     "flow": ["screen_flow", "screen_dwell_rank", "screen_pair_affinity",
-             "reachability", "screen_communities"],
+             "screen_transition", "reachability", "screen_communities"],
     "action": ["click_distribution", "conditional_flow", "path_ranking",
                "markov_order_test"],
     "service": ["cross_service_flow"],
@@ -182,7 +182,10 @@ def _draw(result, top: int) -> None:
         st.line_chart(charts.line_data(result.frame, x))
     elif kind == "heatmap":
         to = "to_state" if "to_state" in result.frame.columns else "to_service"
-        st.dataframe(charts.heatmap_pivot(result.frame, x, to, "cnt"))
+        value = result.viz.get("value", "cnt")
+        grid = charts.heatmap_pivot(result.frame, x, to, value)
+        st.dataframe(grid.style.background_gradient(cmap="Blues"),
+                     use_container_width=True)
 
     env = render.envelope_summary(result.envelope)
     warns = [glossary.warning_label(w) for w in env["warnings"]]
