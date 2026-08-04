@@ -22,8 +22,8 @@ def bar_data(frame: pd.DataFrame, x: str, y: str, top: int) -> pd.Series:
 
 
 def line_data(frame: pd.DataFrame, x: str) -> pd.DataFrame:
-    """x 를 인덱스로 하는 프레임(수치 열 전부를 선으로)."""
-    return frame.set_index(x)
+    """x 를 인덱스로, 수치 열만 선으로. 문자열/혼합 열은 뺀다(차트가 못 그린다)."""
+    return frame.set_index(x).select_dtypes(include="number")
 
 
 def heatmap_pivot(frame: pd.DataFrame, from_col: str, to_col: str,

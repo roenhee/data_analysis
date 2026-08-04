@@ -30,6 +30,18 @@ def test_line_data_indexes_by_x():
     assert "sessions" in out.columns
 
 
+def test_line_data_drops_non_numeric_columns():
+    """session_trend 프레임엔 요일 같은 문자열 열이 섞여 있다 — 선 차트는 수치만 그린다."""
+    frame = pd.DataFrame({
+        "period": ["d1", "d2"],
+        "sessions": [10, 20],
+        "weekday": ["월", "화"],
+    })
+    out = line_data(frame, x="period")
+    assert "sessions" in out.columns
+    assert "weekday" not in out.columns
+
+
 def test_heatmap_pivot_makes_from_by_to_grid():
     frame = pd.DataFrame({
         "from_state": ["a", "a", "b"],
