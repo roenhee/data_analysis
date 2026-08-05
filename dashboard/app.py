@@ -47,6 +47,8 @@ TAB_LABELS = {"overview": "개요", "flow": "화면흐름", "action": "행동",
               "service": "서비스", "quality": "품질"}
 SERVICES = ["top", "media", "entertain", "sports", "content_v", "search"]
 DEFAULT_DATES = "2026-07-14:2026-07-28"
+CHART_TOP = 20     # 차트에 그릴 상위 개수(막대 수천 개 방지). 표는 전량 페이지네이션.
+PAGE_SIZE = 50     # 표 한 페이지 행 수.
 
 
 @st.cache_resource(show_spinner="큐브 로딩…", max_entries=6)
@@ -104,7 +106,7 @@ def _seed_from_url() -> None:
     st.session_state["w_dates"] = ":".join(s["dates"]) or DEFAULT_DATES
     for axis in filters.SEGMENT_AXES:
         st.session_state[f"w_{axis}"] = list(s.get(axis, []))
-    st.session_state["w_top"] = int(s["top"])
+    st.session_state["w_page"] = int(s["page"]) + 1   # state page 는 0-기반, 위젯은 1-기반
     st.session_state["_url_analysis"] = s["analysis"]
     st.session_state["_url_params"] = s["params"]
     st.session_state["_seeded"] = True
@@ -162,30 +164,33 @@ def _run(state: dict):
     return get_analysis(state["analysis"])(cubes, **call_params)
 
 
-def _draw(result, top: int) -> None:
-    """headline 카드 → 표 → 차트 → 봉투."""
+def _draw(result) -> None:
+    """headline 카드 → 표(페이지네이션) → 차트 → 봉투."""
     cards = render.headline_cards(result.headline)
     cols = st.columns(len(cards) or 1)
     for col, (key, value) in zip(cols, cards):
         col.metric(glossary.metric_label(key), value,
                    help=glossary.metric_help(key) or None)
 
-    frame = render.table_slice(result.frame, top)
-    display = frame.copy()
+    display = result.frame.copy()
     for c in display.columns:
         if display[c].dtype == object:
             display[c] = display[c].map(
                 lambda v: glossary.value_label(v) if isinstance(v, str) else v)
+    page = int(st.session_state.get("w_page", 1)) - 1   # 위젯은 1-기반, 슬라이스는 0-기반
+    sliced, n_pages = render.page_slice(display, page, PAGE_SIZE)
     st.dataframe(
-        display, use_container_width=True,
+        sliced, use_container_width=True,
         column_config={c: st.column_config.Column(
             glossary.column_label(c), help=glossary.column_help(c) or None)
             for c in display.columns})
+    if n_pages > 1:
+        st.number_input(f"페이지 (전체 {n_pages}쪽 · {len(display):,}행)",
+                        min_value=1, max_value=n_pages, step=1, key="w_page")
 
     if result.viz.get("kind") == "graph":
         st.graphviz_chart(
-            charts.graph_dot(result.frame, result.viz,
-                             label_of=glossary.value_label),
+            charts.graph_dot(result.frame, result.viz, label_of=glossary.value_label),
             use_container_width=True)
     else:
         kind = charts.chart_kind(result.viz)
@@ -194,15 +199,16 @@ def _draw(result, top: int) -> None:
             y = next((c for c in result.frame.columns
                       if pd.api.types.is_numeric_dtype(result.frame[c])), None)
             if y:
-                st.bar_chart(charts.bar_data(result.frame, x, y, top))
+                st.altair_chart(charts.bar_chart(result.frame, x, y, CHART_TOP),
+                                use_container_width=True)
         elif kind == "line" and x in result.frame.columns:
-            st.line_chart(charts.line_data(result.frame, x))
+            st.altair_chart(charts.line_chart(result.frame, x),
+                            use_container_width=True)
         elif kind == "heatmap":
             to = "to_state" if "to_state" in result.frame.columns else "to_service"
             value = result.viz.get("value", "cnt")
-            grid = charts.heatmap_pivot(result.frame, x, to, value)
-            st.dataframe(grid.style.background_gradient(cmap="Blues"),
-                         use_container_width=True)
+            st.altair_chart(charts.heatmap_chart(result.frame, x, to, value),
+                            use_container_width=True)
 
     env = render.envelope_summary(result.envelope)
     warns = [glossary.warning_label(w) for w in env["warnings"]]
@@ -216,31 +222,36 @@ def main():
     keys = list(TAB_LABELS.keys())
     labels = list(TAB_LABELS.values())
 
-    picked = st.radio("모드", labels, key="w_tab", horizontal=True,
+    # ── 상단 컨트롤바: [단일|비교] + 세그먼트 ──
+    top = st.container()
+    with top:
+        head = st.columns([1.2, 1.6, 1.2, 1, 1, 1, 1, 1, 1])
+        head[0].radio("모드", ["단일", "비교"], key="w_mode",
+                      horizontal=True, label_visibility="collapsed",
+                      disabled=True,
+                      help="비교 모드는 준비 중입니다(다음 단계).")
+        dates = head[1].text_input("기간 (start:end)", key="w_dates")
+        head[2].multiselect(
+            "서비스 (빌드 범위·고정)", SERVICES, default=SERVICES, disabled=True,
+            help="큐브가 6서비스로 빌드돼 있어 부분 선택은 안 됩니다.")
+        services = list(SERVICES)
+        opts = _axis_options()
+        axes = {}
+        for i, a in enumerate(filters.SEGMENT_AXES):
+            choices = opts.get(a, [])
+            st.session_state[f"w_{a}"] = [
+                v for v in st.session_state.get(f"w_{a}", []) if v in choices]
+            axes[a] = head[3 + i].multiselect(
+                glossary.axis_label(a), choices, key=f"w_{a}",
+                format_func=lambda v, ax=a: glossary.axis_value_label(ax, v),
+                help=glossary.axis_help(a) + " (여러 개, 비우면 전체)")
+
+    # ── 분석 탭 ──
+    picked = st.radio("탭", labels, key="w_tab", horizontal=True,
                       label_visibility="collapsed")
     tab = keys[labels.index(picked)]
 
-    st.sidebar.header("세그먼트")
-    dates = st.sidebar.text_input("기간 (start:end)", key="w_dates")
-    # 서비스는 축이 아니라 '빌드 범위'다 — 큐브가 6서비스로 빌드돼 있어 부분 선택은 그
-    # 조합 큐브가 없어 에러가 난다. 고정으로 막고, 서비스별 보기는 후속(per_service)으로.
-    st.sidebar.multiselect(
-        "서비스 (빌드 범위 · 고정)", SERVICES, default=SERVICES, disabled=True,
-        help="큐브가 6서비스로 한 번 빌드돼 있어 부분 선택은 안 됩니다. 서비스별로 보려면 "
-             "그 서비스로 큐브를 빌드하거나 per_service 분석(후속)을 씁니다.")
-    services = list(SERVICES)
-    opts = _axis_options()
-    axes = {}
-    for a in filters.SEGMENT_AXES:
-        choices = opts.get(a, [])
-        # 시드값 중 목록에 없는 건 버린다(옛 URL 등). 비우면 전체.
-        st.session_state[f"w_{a}"] = [
-            v for v in st.session_state.get(f"w_{a}", []) if v in choices]
-        axes[a] = st.sidebar.multiselect(
-            glossary.axis_label(a), choices, key=f"w_{a}",
-            format_func=lambda v, ax=a: glossary.axis_value_label(ax, v),
-            help=glossary.axis_help(a) + " (여러 개 선택 가능, 비우면 전체)")
-    st.sidebar.markdown("---")
+    # ── 사이드바: 분석 + 파라미터 ──
     analysis = _analysis_widget(tab)
     param_values = _param_widgets(analysis)
 
@@ -249,7 +260,7 @@ def main():
         "dates": [d for d in dates.split(":") if d],
         "services": list(services),
         **{a: axes[a] for a in filters.SEGMENT_AXES},
-        "params": param_values, "top": int(st.session_state.get("w_top", 10)),
+        "params": param_values, "page": int(st.session_state.get("w_page", 1)) - 1,
     }
 
     result = _run(state)
@@ -258,11 +269,7 @@ def main():
         desc = glossary.analysis_desc(analysis)
         if desc:
             st.caption(desc)
-        total = len(result.frame)
-        top = st.number_input(
-            f"표시 개수 (전체 {total:,}개 중)", min_value=0, key="w_top")
-        state["top"] = int(top)
-        _draw(result, top)
+        _draw(result)
 
     # URL 을 매 실행 통째로 덮어쓰면(from_dict) 위젯이 리셋되어 클릭 전환이 막힌다.
     # 자동 갱신을 빼고, 현재 화면을 재현하는 공유 링크를 사이드바에 낸다 — 그 링크로
