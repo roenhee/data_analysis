@@ -3,7 +3,7 @@ from dashboard.params import Param, coerce, params_for, required_names
 
 def test_path_ranking_requires_n():
     specs = params_for("path_ranking")
-    assert specs == [Param("n", "int", required=True)]
+    assert specs == [Param("n", "int", required=True, choices=(3, 2, 4, 5))]
     assert required_names("path_ranking") == ["n"]
 
 

@@ -17,21 +17,32 @@ class Param:
 
 
 # 설계 문서 "분석별 파라미터" 표를 그대로 옮긴 것.
+# 수치형 파라미터도 선택지(choices)를 주면 app.py 가 드롭다운으로 낸다. 첫 번째가 기본값
+# (분석 함수의 default 와 같게 맞춘다). screen kind 는 런타임에 화면 목록으로 채운다.
 ANALYSIS_PARAMS: dict[str, list[Param]] = {
     "reachability": [
         Param("source", "screen", required=True),
         Param("target", "screen", required=True),
-        Param("max_k", "int"),
+        Param("max_k", "int", choices=(10, 6, 8, 12)),
     ],
-    "path_ranking": [Param("n", "int", required=True)],
+    "path_ranking": [Param("n", "int", required=True, choices=(3, 2, 4, 5))],
     "click_distribution": [
         Param("by", "choice", choices=("action_kind", "layer1", "layer1,layer2")),
     ],
-    "screen_flow": [Param("exit_within", "pair"), Param("damping", "float")],
-    "screen_dwell_rank": [Param("warn_below", "float")],
-    "screen_communities": [Param("seed", "int"), Param("resolution", "float")],
-    "community_paths": [Param("seed", "int"), Param("resolution", "float"),
-                        Param("top_per_community", "int")],
+    "screen_flow": [
+        Param("exit_within", "pair", choices=("", "1,3", "1,5", "2,5")),
+        Param("damping", "float", choices=(0.85, 0.80, 0.90, 0.95)),
+    ],
+    "screen_dwell_rank": [Param("warn_below", "float", choices=(0.5, 0.3, 1.0, 2.0))],
+    "screen_communities": [
+        Param("seed", "int", choices=(0, 1, 42)),
+        Param("resolution", "float", choices=(1.0, 0.8, 1.2, 1.5)),
+    ],
+    "community_paths": [
+        Param("seed", "int", choices=(0, 1, 42)),
+        Param("resolution", "float", choices=(1.0, 0.8, 1.2, 1.5)),
+        Param("top_per_community", "int", choices=(10, 3, 5, 20)),
+    ],
     "hub_neighbors": [Param("screen", "screen")],
 }
 
