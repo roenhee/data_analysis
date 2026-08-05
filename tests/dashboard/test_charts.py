@@ -1,6 +1,6 @@
 import pandas as pd
 
-from dashboard.charts import chart_kind, bar_data, line_data, heatmap_pivot, graph_dot
+from dashboard.charts import chart_kind, bar_chart, line_chart, heatmap_chart, graph_dot
 
 
 def test_chart_kind_reads_viz():
@@ -16,41 +16,50 @@ def test_missing_kind_is_table():
     assert chart_kind({}) == "table"
 
 
-def test_bar_data_indexes_by_x_and_takes_top():
+def test_bar_chart_is_a_bar_encoding_x_and_y():
     frame = pd.DataFrame({"state": ["a", "b", "c"], "pagerank": [0.3, 0.5, 0.2]})
-    series = bar_data(frame, x="state", y="pagerank", top=2)
-    assert list(series.index) == ["a", "b"]
-    assert list(series.values) == [0.3, 0.5]
+    spec = bar_chart(frame, x="state", y="pagerank", top=3).to_dict()
+    assert spec["mark"]["type"] == "bar"
+    assert spec["encoding"]["x"]["field"] == "state"
+    assert spec["encoding"]["y"]["field"] == "pagerank"
 
 
-def test_line_data_indexes_by_x():
-    frame = pd.DataFrame({"period": ["d1", "d2"], "sessions": [10, 20]})
-    out = line_data(frame, x="period")
-    assert list(out.index) == ["d1", "d2"]
-    assert "sessions" in out.columns
+def test_bar_chart_limits_to_top():
+    frame = pd.DataFrame({"state": list("abcde"), "v": [5, 4, 3, 2, 1]})
+    ch = bar_chart(frame, x="state", y="v", top=2)
+    assert len(ch.data) == 2
 
 
-def test_line_data_drops_non_numeric_columns():
-    """session_trend 프레임엔 요일 같은 문자열 열이 섞여 있다 — 선 차트는 수치만 그린다."""
+def test_bar_chart_sorts_by_value_descending():
+    frame = pd.DataFrame({"state": ["a", "b"], "v": [1.0, 2.0]})
+    spec = bar_chart(frame, x="state", y="v", top=2).to_dict()
+    assert spec["encoding"]["x"]["sort"] == "-y"
+
+
+def test_line_chart_folds_numeric_columns_into_series():
+    """session_trend 처럼 수치 열이 여럿이면 색으로 구분한 여러 선이 된다."""
+    frame = pd.DataFrame({"period": ["d1", "d2"], "sessions": [10, 20], "pv": [30, 40]})
+    spec = line_chart(frame, x="period").to_dict()
+    assert spec["mark"]["type"] == "line"
+    assert spec["encoding"]["color"]["field"] == "series"
+
+
+def test_line_chart_drops_non_numeric_columns():
+    """문자열 열(요일 등)은 선으로 그리지 않는다."""
+    frame = pd.DataFrame({"period": ["d1", "d2"], "sessions": [10, 20], "weekday": ["월", "화"]})
+    ch = line_chart(frame, x="period")
+    assert set(ch.data["series"].unique()) == {"sessions"}
+
+
+def test_heatmap_chart_is_a_rect_mark_with_color_value():
     frame = pd.DataFrame({
-        "period": ["d1", "d2"],
-        "sessions": [10, 20],
-        "weekday": ["월", "화"],
+        "from_state": ["a", "a", "b"], "to_state": ["a", "b", "a"], "cnt": [1, 2, 3],
     })
-    out = line_data(frame, x="period")
-    assert "sessions" in out.columns
-    assert "weekday" not in out.columns
-
-
-def test_heatmap_pivot_makes_from_by_to_grid():
-    frame = pd.DataFrame({
-        "from_state": ["a", "a", "b"],
-        "to_state": ["a", "b", "a"],
-        "cnt": [1, 2, 3],
-    })
-    grid = heatmap_pivot(frame, "from_state", "to_state", "cnt")
-    assert grid.loc["a", "b"] == 2
-    assert grid.loc["b", "a"] == 3
+    spec = heatmap_chart(frame, x="from_state", to="to_state", value="cnt").to_dict()
+    assert spec["mark"]["type"] == "rect"
+    assert spec["encoding"]["x"]["field"] == "from_state"
+    assert spec["encoding"]["y"]["field"] == "to_state"
+    assert spec["encoding"]["color"]["field"] == "cnt"
 
 
 def _community_frame():

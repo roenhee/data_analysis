@@ -7,9 +7,11 @@ DOT 문자열을 st.graphviz_chart 로 그린다. chart_kind 는 나머지(bar/l
 """
 from __future__ import annotations
 
+import altair as alt
 import pandas as pd
 
 _SUPPORTED = {"bar", "line", "heatmap"}
+_BAR_COLOR = "#4e79a7"
 
 # 색맹 친화 팔레트(Tableau 10). community 번호를 색으로.
 _PALETTE = ["#4e79a7", "#f28e2b", "#59a14f", "#e15759", "#b07aa1",
@@ -22,21 +24,49 @@ def chart_kind(viz: dict) -> str:
     return kind if kind in _SUPPORTED else "table"
 
 
-def bar_data(frame: pd.DataFrame, x: str, y: str, top: int) -> pd.Series:
-    """x 를 인덱스로, y 를 값으로 하는 상위 top 시리즈."""
-    return frame.head(max(0, top)).set_index(x)[y]
+def bar_chart(frame: pd.DataFrame, x: str, y: str, top: int) -> alt.Chart:
+    """상위 top 행을 y 내림차순 막대로. 단색·툴팁·정렬 제어(Streamlit 기본과 달리)."""
+    data = frame.head(max(0, top))
+    return (
+        alt.Chart(data)
+        .mark_bar(color=_BAR_COLOR)
+        .encode(
+            x=alt.X(f"{x}:N", sort="-y", title=None),
+            y=alt.Y(f"{y}:Q", title=None),
+            tooltip=[x, y],
+        )
+    )
 
 
-def line_data(frame: pd.DataFrame, x: str) -> pd.DataFrame:
-    """x 를 인덱스로, 수치 열만 선으로. 문자열/혼합 열은 뺀다(차트가 못 그린다)."""
-    return frame.set_index(x).select_dtypes(include="number")
+def line_chart(frame: pd.DataFrame, x: str) -> alt.Chart:
+    """x 를 축으로, 수치 열들을 색으로 구분한 여러 선. 문자열 열은 뺀다."""
+    num = [c for c in frame.select_dtypes(include="number").columns if c != x]
+    long = frame.melt(id_vars=[x], value_vars=num,
+                      var_name="series", value_name="value")
+    return (
+        alt.Chart(long)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X(x, title=None),
+            y=alt.Y("value:Q", title=None),
+            color=alt.Color("series:N", scale=alt.Scale(range=_PALETTE), title=None),
+            tooltip=[x, "series", "value"],
+        )
+    )
 
 
-def heatmap_pivot(frame: pd.DataFrame, from_col: str, to_col: str,
-                  value: str) -> pd.DataFrame:
-    """(from, to) 격자. 값은 value 열."""
-    return frame.pivot_table(index=from_col, columns=to_col, values=value,
-                             aggfunc="sum", fill_value=0)
+def heatmap_chart(frame: pd.DataFrame, x: str, to: str, value: str) -> alt.Chart:
+    """(x, to) 격자를 색 농도로. 진짜 히트맵 — 표+그라데이션이 아니다."""
+    return (
+        alt.Chart(frame)
+        .mark_rect()
+        .encode(
+            x=alt.X(f"{x}:N", title=None),
+            y=alt.Y(f"{to}:N", title=None),
+            color=alt.Color(f"{value}:Q", scale=alt.Scale(scheme="blues"), title=None),
+            tooltip=[x, to, value],
+        )
+    )
 
 
 def graph_dot(frame: pd.DataFrame, viz: dict, label_of=None) -> str:
