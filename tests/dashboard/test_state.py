@@ -7,7 +7,7 @@ def test_defaults_round_trip():
 
 
 def test_scalar_round_trip():
-    state = {**DEFAULTS, "analysis": "screen_flow", "top": 25}
+    state = {**DEFAULTS, "analysis": "screen_flow", "page": 2}
     assert decode_state(encode_state(state)) == state
 
 

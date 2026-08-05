@@ -18,13 +18,13 @@ DEFAULTS: dict = {
     "age_band": [],
     "daypart": [],
     "params": {},         # 분석별 파라미터
-    "top": 10,
+    "page": 0,
 }
 
 _LIST_KEYS = ("services", "service_type", "app_version", "os", "gender",
               "age_band", "daypart")
 _RANGE_KEYS = ("dates",)
-_INT_KEYS = ("top",)
+_INT_KEYS = ("page",)
 
 
 def encode_state(state: dict) -> dict[str, str]:
