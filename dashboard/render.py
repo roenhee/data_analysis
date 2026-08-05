@@ -25,9 +25,16 @@ def _fmt(value: float) -> str:
     return f"{value:.2f}"
 
 
-def table_slice(frame: pd.DataFrame, top: int) -> pd.DataFrame:
-    """상위 top 행. 0 이하면 빈 프레임, 프레임보다 크면 전체."""
-    return frame.head(max(0, top))
+def page_slice(frame: pd.DataFrame, page: int, page_size: int):
+    """(그 페이지의 행, 총 페이지 수). 범위 밖 page 는 마지막으로 떨군다.
+
+    표시 개수 입력을 없앤 대신 전체를 페이지로 넘겨본다 — 상위 N 만 보이던 걸 다 볼 수 있다.
+    """
+    n = len(frame)
+    n_pages = max(1, math.ceil(n / page_size))
+    page = max(0, min(page, n_pages - 1))
+    start = page * page_size
+    return frame.iloc[start:start + page_size], n_pages
 
 
 def envelope_summary(envelope: dict) -> dict:
