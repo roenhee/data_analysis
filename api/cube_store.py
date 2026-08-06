@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import functools
+from collections.abc import Iterable
 from datetime import date
 
 from analytics.analyses.base import CubeSet
@@ -44,10 +45,16 @@ def _load_cached(
 
 
 def load(
-    cube_names, start: str, end: str, services, state_dict_version: str,
+    cube_names: Iterable[str], start: str, end: str,
+    services: Iterable[str], state_dict_version: str,
 ) -> CubeSet:
     """기간 상한을 검사하고 캐시된 로드를 부른다."""
     days = period_days(start, end)
+    if days < 1:
+        raise ValueError(
+            f"start({start}) 가 end({end}) 보다 이후입니다 — start 는 end 이전이거나 "
+            "같아야 합니다."
+        )
     if days > HARD_LIMIT_DAYS:
         raise PeriodTooLongError(
             f"기간 {days}일이 절대 상한 {HARD_LIMIT_DAYS}일을 넘습니다 — "
