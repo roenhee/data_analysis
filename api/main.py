@@ -22,11 +22,13 @@ app.add_middleware(
 
 @app.get("/api/meta")
 def get_meta():
+    """분석 카탈로그·세그먼트 축·present_dates 메타를 낸다."""
     return meta.build_meta()
 
 
 @app.get("/api/analysis/{name}")
 def get_analysis_result(name: str, request: Request, start: str, end: str):
+    """쿼리를 파싱해 run_analysis 로 넘기고 결과 JSON 을 낸다."""
     # 세그먼트 축은 반복 쿼리로 받는다(multiselect).
     segment = {"services": meta.SERVICES, "dates": [start, end]}
     for axis in filters.SEGMENT_AXES:
@@ -45,7 +47,12 @@ def get_analysis_result(name: str, request: Request, start: str, end: str):
     try:
         return analysis.run_analysis(
             name, start, end, segment, param_values, meta.STATE_DICT_VERSION)
-    except cube_store.PeriodTooLongError as exc:
-        raise HTTPException(400, str(exc)) from exc
     except UnknownAnalysisError as exc:
+        # KeyError 하위 클래스라 ValueError 와 겹치지 않는다 — 순서와 무관하게 안전하지만,
+        # "모르는 분석"이 항상 404 로 남는다는 걸 명시하려고 먼저 둔다.
         raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        # 잘못된 클라이언트 입력(기간 역전·기간 상한 초과·날짜 형식 오류·파라미터 타입
+        # 오류)은 전부 ValueError 로 올라온다 — 400 으로 매핑한다(500 이 아니다).
+        # PeriodTooLongError 도 ValueError 하위 클래스라 여기 걸린다.
+        raise HTTPException(400, str(exc)) from exc
