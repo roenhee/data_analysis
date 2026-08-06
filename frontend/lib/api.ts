@@ -1,4 +1,6 @@
 // 1단계-A 백엔드 API 계약. 숫자는 백엔드 analyses 가 만든다 — 여기선 타입·fetch 만.
+// 백엔드(FastAPI)는 CORS 를 열어 두므로(allow_origins=["*"]) 직접 호출한다.
+// 배포 시 NEXT_PUBLIC_API_BASE 로 백엔드 주소를 바꾼다(기본 dev = localhost:8000).
 
 export interface ParamSpec {
   name: string
@@ -47,7 +49,8 @@ export interface AnalysisResult {
   envelope: Envelope
 }
 
-const API = "/api"
+const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000"
+const API = `${BASE}/api`
 
 /** 세그먼트 축은 반복(?os=a&os=b), 스칼라는 set. 백엔드 main.py 의 파싱과 짝. */
 export function buildQuery(params: Record<string, string | string[]>): URLSearchParams {
