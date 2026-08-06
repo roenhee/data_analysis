@@ -11,8 +11,8 @@ import numpy as np
 import pandas as pd
 
 from analytics.analyses.base import AnalysisResult, get_analysis
-from dashboard import charts, filters, glossary, params, render
 from api import cube_store
+from dashboard import charts, filters, glossary, params, render
 
 CHART_TOP = 20   # 차트에 그릴 상위 개수(막대 수천 개 방지). 표는 전량.
 
@@ -36,7 +36,9 @@ def vega_spec(result: AnalysisResult, chart_top: int = CHART_TOP):
     viz = result.viz or {}
     frame = result.frame
     if viz.get("kind") == "graph":
-        # 1단계 골격엔 graph 분석이 없다(session_trend=line). 형태만 유지.
+        # 그래프(예: screen_communities)는 Vega-Lite 스펙이 아니라 노드/엣지 구조다.
+        # Streamlit 쪽 graphviz_chart 의 대응품 — 원본 그래프 서술(kind+x+edges)을
+        # 그대로 넘겨 프론트가 직접 그리게 한다.
         return {"kind": "graph", "x": viz.get("x", "state"),
                 "edges": viz.get("edges", [])}
     kind = charts.chart_kind(viz)
