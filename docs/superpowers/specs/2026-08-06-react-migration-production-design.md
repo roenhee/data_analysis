@@ -132,10 +132,14 @@ frontend/src/
 
 | 엔드포인트 | 반환 |
 |---|---|
-| `GET /api/meta` | `{ tabs, analyses:[{name,label,help,params,viz_kinds}], segments:[{axis,values}], present_dates:{min,max}, present_services, defaults }` |
+| `GET /api/meta` | `{ tabs, analyses:[{name,label,help,params}], segments:[{axis,values}], present_dates:[…], present_services, defaults }` |
 | `GET /api/analysis/{name}` (query: `start,end,{axis}=…,{param}=…`) | `{ headline:[{label,value,help}], columns:[{key,label,help}], rows:[[]], viz:<VegaLite spec \| {kind:"graph",…}>, envelope:{warnings[], state_dict_version, n_dates, period_days} }` |
 
 - 라벨(한글)·설명은 API 가 `glossary` 로 붙여 보낸다 — 프론트는 표시만.
+- **`present_dates` 는 빌드된 날짜 전체 목록**이다(`{min,max}` 아님) — 프론트가 첫날/끝날을 뽑고
+  중간 빌드 갭까지 표시할 수 있게. **`analyses[]` 에 `viz_kinds` 는 없다** — `viz.kind` 는 분석
+  실행 시점에 정해져(정적으로 알 수 없다) 프론트가 각 분석 **응답의 `viz`** 로 차트 종류를 읽는다.
+  (2026-08-06 1단계-A 구현·최종리뷰 반영.)
 - 필수 파라미터 누락 시 400 + 메시지. 절대 상한 초과 시 400. 소프트 상한 초과는 200 + `period_wide` 경고.
 - **차트**: `charts.py` 의 Altair 가 이미 Vega-Lite 생성기다. `alt.Chart.to_dict()` 로 스펙을
   만들어 API 가 넘기면 프론트가 **react-vega** 로 렌더. graph(군집)는 Vega-Lite 밖이라 별도
