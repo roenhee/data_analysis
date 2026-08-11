@@ -191,3 +191,126 @@ def markov_order_test(cubes: CubeSet, **_) -> AnalysisResult:
         envelope=envelope_for(cubes, {}, warnings),
         viz={"kind": "bar", "x": "state"},
     )
+
+
+def _parse_ngrams(rows: pd.DataFrame, n: int) -> tuple[pd.DataFrame, int]:
+    """`s1>...>sn` 을 (context=s1..s(n-1), cur=s(n-1), next=sn) 으로 가른다.
+
+    `_parse_trigrams` 를 임의 차수로 일반화한 것. context 는 문자열로 이어 붙인다(표시·그룹키).
+    `cur` 은 문맥의 **마지막 화면** — 1차 예측 `P(next|cur)` 의 조건이다. 화면 이름에 `>` 가
+    있어 조각 수가 n 이 아닌 행은 못 가른 것으로 세어 봉투에 싣는다(조용히 넘기지 않는다).
+    """
+    kept = rows[rows["path"] != OTHER_PATH]
+    parts = kept["path"].str.split(">")
+    good = parts.map(len) == n
+    gp = parts[good]
+    frame = pd.DataFrame({
+        "context": [">".join(p[:-1]) for p in gp],
+        "cur": [p[-2] for p in gp],
+        "next_state": [p[-1] for p in gp],
+        "cnt": kept.loc[good, "cnt"].to_numpy(dtype=float),
+    })
+    return frame, int((~good).sum())
+
+
+@analysis("markov_order_flow")
+def markov_order_flow(cubes: CubeSet, order: int = 2,
+                      min_context: int = 1000, **_) -> AnalysisResult:
+    """직전 화면(들)을 알면 다음 화면 예측이 어떻게 바뀌나 — 2차·3차 마르코프 모델.
+
+    `markov_order_test` 는 1차 가정이 **얼마나** 약한지(`excess_information`)를 잰다. 이건
+    그걸 **어디서·어떻게**로 바꾼다: `order` 걸음 문맥마다 관측 `P(다음 | 문맥)` 의 1위 화면
+    (`top_order_next`)이 1차 예측의 1위(`top1_next`)와 **다른 문맥(`argmax_flips`)** 을 물량순으로
+    낸다. 이게 "직전 화면을 봐야 하는 자리" 다.
+
+    `order=2` 는 (직전, 현재) 문맥이고 `path` 큐브 n=3 을 쓴다. `order=3` 은 (직전2, 직전,
+    현재)·n=4. 1차 예측은 전이 큐브에서 온다(이 프로젝트의 마르코프 분석들이 실제로 쓰는 모델).
+
+    `min_context` 미만 문맥은 **표에서 뺀다** — 3건짜리 문맥이 뒤집혀도 뜻이 없다(얇은 셀의
+    노이즈). 단 `excess_information`·`flip_share` 는 얇은 문맥까지 **물량 가중**으로 전부 센다
+    (`markov_order_test` 와 같은 정의). `coverage` 는 상위 200 컷이 남긴 비율이다.
+    """
+    if cubes.path is None:
+        raise ValueError("markov_order_flow needs the path cube; it is absent")
+    if cubes.transition is None:
+        raise ValueError(
+            "markov_order_flow needs the transition cube for the first-order "
+            "prediction; it is absent"
+        )
+    n = int(order) + 1
+
+    grams, unparsed = _parse_ngrams(_one_n(cubes.path, n), n)
+    # 세그먼트(축 조합)별로 쪼개진 큐브라 관측 분포 전에 (문맥,cur,next) 로 합친다 —
+    # `markov_order_test` 와 같은 함정·같은 처리(안 합치면 조각 확률로 KL 음수).
+    grams = grams.groupby(["context", "cur", "next_state"],
+                          as_index=False)["cnt"].sum()
+
+    pair = cubes.transition.groupby(["from_state", "to_state"],
+                                    observed=True)["cnt"].sum()
+    row_total = pair.groupby("from_state").transform("sum")
+    first = (pair / row_total).rename("p_first").reset_index().rename(
+        columns={"from_state": "cur", "to_state": "next_state"})
+
+    joined = grams.merge(first, on=["cur", "next_state"], how="left")
+
+    rows = []
+    for (context, cur), g in joined.groupby(["context", "cur"], observed=True):
+        total = float(g["cnt"].sum())
+        if total <= 0:
+            continue
+        observed = g["cnt"].to_numpy(dtype=float) / total
+        expected = g["p_first"].to_numpy(dtype=float)
+        top_order_next = g["next_state"].to_numpy()[int(np.argmax(g["cnt"].to_numpy()))]
+        g1 = g.dropna(subset=["p_first"])
+        top1_next = (g1["next_state"].to_numpy()[int(np.argmax(g1["p_first"].to_numpy()))]
+                     if not g1.empty else None)
+        usable = (observed > 0) & np.isfinite(expected) & (expected > 0)
+        divergence = float(
+            (observed[usable] * np.log(observed[usable] / expected[usable])).sum()
+        ) if usable.any() else float("nan")
+        rows.append({
+            "context": context, "cnt": total,
+            "top1_next": top1_next, "top_order_next": top_order_next,
+            "argmax_flips": top1_next is not None and top1_next != top_order_next,
+            "divergence": divergence,
+        })
+
+    full = pd.DataFrame(
+        rows,
+        columns=["context", "cnt", "top1_next", "top_order_next",
+                 "argmax_flips", "divergence"],
+    )
+    weight_total = float(full["cnt"].sum()) if not full.empty else 0.0
+    usable = full.dropna(subset=["divergence"])
+    excess = float(
+        (usable["divergence"] * usable["cnt"]).sum() / weight_total
+    ) if weight_total > 0 else float("nan")
+    flip_share = float(
+        full.loc[full["argmax_flips"], "cnt"].sum() / weight_total
+    ) if weight_total > 0 else float("nan")
+
+    # 표는 뜻 있는 문맥만(≥min_context), 물량순.
+    frame = full[full["cnt"] >= min_context].sort_values(
+        "cnt", ascending=False, ignore_index=True)
+
+    warnings = []
+    if unparsed:
+        warnings.append({
+            "check_name": "unparsable_path",
+            "rows": unparsed,
+            "reason": "a screen name contains the '>' separator, so the n-gram could "
+                      "not be split; those rows are excluded",
+        })
+
+    return AnalysisResult(
+        frame=frame,
+        headline={
+            "order": float(order),
+            "excess_information": excess,
+            "flip_share": flip_share,
+            "contexts": float(len(frame)),
+            "coverage": path_coverage(cubes.path, n=n),
+        },
+        envelope=envelope_for(cubes, {}, warnings),
+        viz={"kind": "bar", "x": "context"},
+    )

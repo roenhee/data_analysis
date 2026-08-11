@@ -30,7 +30,7 @@ TABS = {
              "screen_transition", "hub_neighbors", "reachability",
              "screen_communities", "community_paths"],
     "action": ["click_distribution", "conditional_flow", "path_ranking",
-               "markov_order_test"],
+               "markov_order_test", "markov_order_flow"],
     "service": ["cross_service_flow"],
     "quality": ["quality_report"],
 }

@@ -26,6 +26,7 @@ ANALYSIS_PARAMS: dict[str, list[Param]] = {
         Param("max_k", "int", choices=(10, 6, 8, 12)),
     ],
     "path_ranking": [Param("n", "int", required=True, choices=(3, 2, 4, 5))],
+    "markov_order_flow": [Param("order", "int", choices=(2, 3))],
     "click_distribution": [
         Param("by", "choice", choices=("action_kind", "layer1", "layer1,layer2")),
     ],

@@ -15,7 +15,7 @@ from data_layer.config import Config
 # community_paths 도 마찬가지다 — 군집은 transition 에서, 5-gram 은 path 에서 온다.
 ACTION_ANALYSES = frozenset(
     {"click_distribution", "conditional_flow", "path_ranking", "markov_order_test",
-     "community_paths"}
+     "markov_order_flow", "community_paths"}
 )
 
 # app.py 가 사이드바 위젯으로 채우는 축들.

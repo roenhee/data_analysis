@@ -35,6 +35,7 @@ TRANSITION = _cube_paths("transition", {"from_state", "to_state", "cnt", "dur_n"
                                         "app_version", "service_type", "period"})
 SESSION = _cube_paths("session", {"sessions", "uv", "pv", "events", "duration_sum"})
 QUALITY = _cube_paths("quality", {"check_name", "violated", "total"})
+PATH = _cube_paths("path", {"path", "cnt"})
 
 needs_cubes = pytest.mark.skipif(
     not (TRANSITION and SESSION and QUALITY),
@@ -107,6 +108,7 @@ ACTION_LAYER_REQUIRES = {
     "conditional_flow": "cond_transition",
     "path_ranking": "path",
     "markov_order_test": "path",
+    "markov_order_flow": "path",
 }
 
 
@@ -137,8 +139,8 @@ def test_the_shipped_registry_is_what_it_should_be():
     """분석이 추가·삭제되면 여기서 눈에 띈다."""
     assert _shipped_analyses() == [
         "click_distribution", "community_paths", "conditional_flow",
-        "cross_service_flow", "hub_neighbors", "markov_order_test",
-        "path_ranking", "quality_report",
+        "cross_service_flow", "hub_neighbors", "markov_order_flow",
+        "markov_order_test", "path_ranking", "quality_report",
         "reachability", "screen_communities", "screen_dwell_rank", "screen_flow",
         "screen_pair_affinity", "screen_transition", "session_trend",
     ]
@@ -526,6 +528,47 @@ def test_the_busiest_pair_is_not_the_most_affine_one(real_results):
     thin = [w for w in got.envelope["warnings"]
             if w["check_name"] == "thin_transition_cells"]
     assert len(thin) == 1 and thin[0]["share"] == pytest.approx(0.189, abs=0.01)
+
+
+@pytest.mark.skipif(not (PATH and TRANSITION), reason="path·transition 큐브 필요")
+def test_markov_order_flow_ranks_where_the_previous_screen_flips_the_prediction():
+    """2차·3차 마르코프: 직전 화면이 다음 예측(argmax)을 뒤집는 문맥을 물량순으로.
+
+    실측(2026-08-11, 설계 문서 `specs/2026-08-11-higher-order-markov-design.md`): order=2 는
+    excess 0.508 · flip_share 0.454(트래픽 45%에서 1차 argmax 가 틀림) · 169 문맥. 1위 flip
+    문맥 [top/콘텐츠탭_진입>top/엠탑조회] 는 1차로 엠탑 자기루프지만 2차 관측은 media/뉴스보기.
+    order=3 은 더 깊이 봐 excess 가 오른다(coverage 는 상위200 컷에 더 물려 낮아진다).
+    """
+    dates = sorted({_date_of(p) for p in PATH} & {_date_of(p) for p in TRANSITION})
+    keep = set(dates)
+
+    def read(paths):
+        return pd.concat(
+            [pd.read_parquet(p) for p in paths if _date_of(p) in keep],
+            ignore_index=True,
+        )
+
+    cubes = CubeSet(
+        session=None, transition=read(TRANSITION), quality=None,
+        state_dict_version="sd_real_cubes", services=["top"],
+        requested_dates=dates, present_dates=dates, path=read(PATH),
+    )
+
+    two = get_analysis("markov_order_flow")(cubes, order=2)
+    assert 0.45 < two.headline["excess_information"] < 0.55
+    assert 0.40 < two.headline["flip_share"] < 0.50, "트래픽 절반 가까이서 직전이 예측을 뒤집는다"
+    assert two.headline["order"] == 2.0
+
+    flips = two.frame[two.frame["argmax_flips"]].sort_values("cnt", ascending=False)
+    assert not flips.empty
+    top = flips.iloc[0]
+    assert top["top1_next"] != top["top_order_next"], "flip 문맥은 1·2차 예측이 달라야 한다"
+    assert top["cnt"] > 1_000, "min_context 아래는 표에서 빠진다"
+
+    # 3차는 더 깊이 봐 초과정보가 오르고, 상위200 컷에 더 물려 커버리지가 낮아진다.
+    three = get_analysis("markov_order_flow")(cubes, order=3)
+    assert three.headline["excess_information"] > two.headline["excess_information"]
+    assert three.headline["coverage"] < two.headline["coverage"]
 
 
 @needs_cubes
