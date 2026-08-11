@@ -48,6 +48,7 @@ export interface AnalysisResult {
   headline: Headline[]
   columns: Column[]
   rows: unknown[][]
+  total_rows: number // 전체 행수(rows 는 서버 페이지네이션 시 한 페이지일 수 있다)
   viz: Viz
   envelope: Envelope
 }

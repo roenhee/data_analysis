@@ -170,6 +170,7 @@ export default function Home() {
                     <ResultTable
                       columns={result.columns}
                       rows={result.rows}
+                      total={result.total_rows}
                       page={dash.page}
                       onPageChange={(p) => update({ page: p })}
                     />

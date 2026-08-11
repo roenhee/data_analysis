@@ -123,3 +123,24 @@ def test_run_session_trend_real_cube():
     assert out["headline"], "headline 이 비면 안 된다"
     assert out["viz"]["encoding"]["x"] is not None
     assert len(out["rows"]) >= 1
+    assert out["total_rows"] == len(out["rows"]), "페이지 크기 없으면 전량이다"
+
+
+def test_server_pagination_slices_rows_but_keeps_total():
+    seg = {"services": list(_SERVICES)}
+    full = analysis.run_analysis(
+        "session_trend", "2026-07-14", "2026-08-04", seg, {}, "sd_68461a6e4fc6ccac")
+    total = full["total_rows"]
+    assert total > 3, "이 픽스처는 페이지보다 행이 많아야 검증이 된다"
+
+    p1 = analysis.run_analysis(
+        "session_trend", "2026-07-14", "2026-08-04", seg, {}, "sd_68461a6e4fc6ccac",
+        page=1, page_size=3)
+    p2 = analysis.run_analysis(
+        "session_trend", "2026-07-14", "2026-08-04", seg, {}, "sd_68461a6e4fc6ccac",
+        page=2, page_size=3)
+    assert len(p1["rows"]) == 3
+    assert p1["total_rows"] == total, "총 행수는 페이지와 무관하게 전체다"
+    assert p1["rows"] != p2["rows"], "다른 페이지는 다른 행이다"
+    # 차트는 페이지가 아니라 전체 프레임으로 그린다.
+    assert p1["viz"] == full["viz"]

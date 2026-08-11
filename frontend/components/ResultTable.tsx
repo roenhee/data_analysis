@@ -5,27 +5,27 @@ import {
 } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
 import type { Column } from "@/lib/api"
+import { PAGE_SIZE } from "@/lib/state"
 
-const PAGE_SIZE = 25
-
-/** 클라이언트 페이지네이션. 전체 rows 를 받아 page 슬라이스만 그린다(서버 페이지네이션은
- *  범위 밖). page 는 상위(dash.page)에서 와 URL 공유된다. */
+/** 서버 페이지네이션. `rows` 는 **이미 이 페이지의 행**(서버가 슬라이스), `total` 은 전체
+ *  행수다. 페이지 이동은 상위(dash.page)로 올라가 서버 재조회를 부른다 — 큰 프레임을 전량
+ *  전송하지 않는다(분석 결과는 서버가 캐시해 재계산 없이 다음 페이지를 낸다). */
 export function ResultTable({
   columns,
   rows,
+  total,
   page,
   onPageChange,
 }: {
   columns: Column[]
   rows: unknown[][]
+  total: number
   page: number
   onPageChange: (page: number) => void
 }) {
-  const total = rows.length
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const current = Math.min(Math.max(1, page), pageCount)
   const startIdx = (current - 1) * PAGE_SIZE
-  const slice = rows.slice(startIdx, startIdx + PAGE_SIZE)
 
   return (
     <div className="space-y-2">
@@ -39,7 +39,7 @@ export function ResultTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {slice.map((row, i) => (
+            {rows.map((row, i) => (
               <TableRow key={startIdx + i}>
                 {row.map((cell, j) => (
                   <TableCell key={j}>{cell == null ? "" : String(cell)}</TableCell>
@@ -52,7 +52,7 @@ export function ResultTable({
       {total > PAGE_SIZE && (
         <div className="flex items-center justify-between text-sm text-muted-foreground">
           <span>
-            {startIdx + 1}–{Math.min(startIdx + PAGE_SIZE, total)} / 총{" "}
+            {startIdx + 1}–{Math.min(startIdx + rows.length, total)} / 총{" "}
             {total.toLocaleString()}행
           </span>
           <div className="flex items-center gap-2">

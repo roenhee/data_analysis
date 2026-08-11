@@ -36,9 +36,12 @@ def get_analysis_result(name: str, request: Request, start: str, end: str):
         if values:
             segment[axis] = values
 
-    # 나머지 쿼리는 분석 파라미터.
-    reserved = {"start", "end"} | set(filters.SEGMENT_AXES)
+    # 나머지 쿼리는 분석 파라미터. page/page_size 는 서버 페이지네이션용이라 뺀다.
+    reserved = {"start", "end", "page", "page_size"} | set(filters.SEGMENT_AXES)
     param_values = {k: v for k, v in request.query_params.items() if k not in reserved}
+    page = int(request.query_params.get("page") or "1")
+    _ps = request.query_params.get("page_size")
+    page_size = int(_ps) if _ps else None
 
     missing = [n for n in params.required_names(name) if n not in param_values]
     if missing:
@@ -46,7 +49,8 @@ def get_analysis_result(name: str, request: Request, start: str, end: str):
 
     try:
         return analysis.run_analysis(
-            name, start, end, segment, param_values, meta.STATE_DICT_VERSION)
+            name, start, end, segment, param_values, meta.STATE_DICT_VERSION,
+            page=page, page_size=page_size)
     except UnknownAnalysisError as exc:
         # KeyError 하위 클래스라 ValueError 와 겹치지 않는다 — 순서와 무관하게 안전하지만,
         # "모르는 분석"이 항상 404 로 남는다는 걸 명시하려고 먼저 둔다.

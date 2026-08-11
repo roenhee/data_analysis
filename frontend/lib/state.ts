@@ -142,12 +142,16 @@ export function toCompareParams(state: DashState): Record<string, string | strin
   return out
 }
 
-/** 분석 요청에 보낼 파라미터만(백엔드 계약: start·end·세그먼트 반복·파라미터). tab·page 는
- *  프론트 상태라 제외한다. */
+export const PAGE_SIZE = 25 // 표 한 페이지 행수(서버 페이지네이션과 짝)
+
+/** 분석 요청 파라미터: start·end·세그먼트·파라미터 + 서버 페이지네이션(page·page_size).
+ *  page 를 넣으므로 page 변경이 재조회를 부른다(서버가 그 페이지만 슬라이스). */
 export function toFetchParams(state: DashState): Record<string, string | string[]> {
   const out: Record<string, string | string[]> = {
     start: state.start,
     end: state.end,
+    page: String(state.page),
+    page_size: String(PAGE_SIZE),
   }
   for (const [axis, vals] of Object.entries(state.segments)) {
     if (vals.length) out[axis] = vals

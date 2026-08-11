@@ -13,8 +13,20 @@ import pandas as pd
 from analytics.analyses.base import AnalysisResult, get_analysis
 from api import cube_store
 from api import charts, filters, glossary, params, render
+from api.byte_cache import ByteBudgetCache
 
 CHART_TOP = 20   # 차트에 그릴 상위 개수(막대 수천 개 방지). 표는 전량.
+
+
+def _result_bytes(r: AnalysisResult) -> int:
+    return int(r.frame.memory_usage(deep=True).sum()) if r.frame is not None else 0
+
+
+# 계산된 AnalysisResult 를 캐시한다 — 페이지 이동은 같은 결과의 다른 슬라이스일 뿐이라
+# 분석을 다시 돌리지 않는다(서버 페이지네이션이 재계산 없이 싸게 된다). 큐브 캐시와 별개.
+_RESULT_CACHE: ByteBudgetCache[tuple, AnalysisResult] = ByteBudgetCache(
+    budget_bytes=2 * 1024**3, sizeof=_result_bytes
+)
 
 
 def _json_safe(value):
@@ -56,8 +68,13 @@ def vega_spec(result: AnalysisResult, chart_top: int = CHART_TOP):
     return None
 
 
-def result_to_json(result: AnalysisResult, period_days_value: int | None = None) -> dict:
-    """AnalysisResult → {headline, columns, rows, viz, envelope}."""
+def result_to_json(result: AnalysisResult, period_days_value: int | None = None,
+                   page: int = 1, page_size: int | None = None) -> dict:
+    """AnalysisResult → {headline, columns, rows, total_rows, viz, envelope}.
+
+    `page_size` 가 주어지면 rows 를 그 페이지만 낸다(서버 페이지네이션) — 큰 프레임의
+    전량 전송을 피한다. viz 는 **전체 프레임**으로 그린다(차트는 페이지가 아니라 전체를 본다).
+    """
     cards = render.headline_cards(result.headline)
     headline = [
         {"label": glossary.metric_label(key), "value": shown,
@@ -69,8 +86,14 @@ def result_to_json(result: AnalysisResult, period_days_value: int | None = None)
          "help": glossary.column_help(c) or None}
         for c in result.frame.columns
     ]
-    rows = [[_json_safe(v) for v in row]
-            for row in result.frame.to_numpy().tolist()]
+    all_rows = [[_json_safe(v) for v in row]
+                for row in result.frame.to_numpy().tolist()]
+    total_rows = len(all_rows)
+    if page_size:
+        start = max(0, (page - 1) * page_size)
+        rows = all_rows[start:start + page_size]
+    else:
+        rows = all_rows
 
     env = render.envelope_summary(result.envelope)
     warnings = [glossary.warning_label(w) for w in env["warnings"]]
@@ -83,17 +106,35 @@ def result_to_json(result: AnalysisResult, period_days_value: int | None = None)
         "period_days": period_days_value,
     }
     return {"headline": headline, "columns": columns, "rows": rows,
-            "viz": vega_spec(result), "envelope": envelope}
+            "total_rows": total_rows, "viz": vega_spec(result), "envelope": envelope}
+
+
+def _segment_key(segment: dict) -> tuple:
+    """세그먼트 축 선택을 해시 가능한 키로. services·dates 는 로드 키라 제외(축만)."""
+    return tuple(sorted(
+        (k, tuple(v)) for k, v in segment.items()
+        if k not in ("services", "dates")
+    ))
 
 
 def run_analysis(name: str, start: str, end: str, segment: dict,
-                 param_values: dict, state_dict_version: str) -> dict:
-    """cube_store 로드 → 축 필터 → coerce → 분석 호출 → JSON."""
-    cubes = cube_store.load(
-        tuple(sorted(filters.cube_names_for(name))),
-        start, end, tuple(segment["services"]), state_dict_version,
+                 param_values: dict, state_dict_version: str,
+                 page: int = 1, page_size: int | None = None) -> dict:
+    """cube_store 로드 → 축 필터 → coerce → 분석 호출(결과 캐시) → JSON(페이지 슬라이스)."""
+    key = (name, start, end, tuple(segment["services"]), _segment_key(segment),
+           tuple(sorted(param_values.items())), state_dict_version)
+
+    def compute() -> AnalysisResult:
+        cubes = cube_store.load(
+            tuple(sorted(filters.cube_names_for(name))),
+            start, end, tuple(segment["services"]), state_dict_version,
+        )
+        cubes = filters.apply_segment(cubes, segment)
+        call_params = params.coerce(name, param_values)
+        return get_analysis(name)(cubes, **call_params)
+
+    result = _RESULT_CACHE.get_or_load(key, compute)
+    return result_to_json(
+        result, period_days_value=cube_store.period_days(start, end),
+        page=page, page_size=page_size,
     )
-    cubes = filters.apply_segment(cubes, segment)
-    call_params = params.coerce(name, param_values)
-    result = get_analysis(name)(cubes, **call_params)
-    return result_to_json(result, period_days_value=cube_store.period_days(start, end))
