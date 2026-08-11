@@ -13,9 +13,11 @@ from analytics.analyses.cubes import load_cube_set
 from dashboard import filters, glossary, params
 from data_layer.config import Config
 
-# 정본 빌드(spec 2026-08-06 "정본 빌드 선택"): 6서비스 15일 완성본.
-STATE_DICT_VERSION = "sd_2ab5ec25e750dda2"
-SERVICES = ["top", "media", "entertain", "sports", "content_v", "search"]
+# 정본 빌드(spec 2026-08-06 "정본 빌드 선택"): 7서비스(agorax 포함) 22일 완성본
+# (07-14~08-04). state 사전·서비스 목록이 cube_key 를 유도하므로 이 두 상수가 디스크의
+# 큐브 디렉토리를 가리킨다 — 오프라인 검증으로 6종 전부 기존 큐브에 적중 확인(재빌드 없음).
+STATE_DICT_VERSION = "sd_68461a6e4fc6ccac"
+SERVICES = ["top", "media", "entertain", "sports", "content_v", "search", "agorax"]
 # 세그먼트 값을 훑을 고정 창(정본 빌드가 실제로 덮는 날짜 범위). 값 목록은 날짜가 늘어도
 # 바뀌지 않으므로 넓게 훑을 필요가 없다.
 _SEGMENT_SCAN_WINDOW = ("2026-07-14", "2026-07-28")

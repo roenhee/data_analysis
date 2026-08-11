@@ -111,13 +111,14 @@ def test_vega_spec_graph_is_passthrough_dict():
     assert "encoding" not in spec
 
 
-_SERVICES = ("top", "media", "entertain", "sports", "content_v", "search")
+# 정본 빌드(7서비스 22일). 구 6서비스 큐브는 삭제됐다.
+_SERVICES = ("top", "media", "entertain", "sports", "content_v", "search", "agorax")
 
 
 def test_run_session_trend_real_cube():
     out = analysis.run_analysis(
         "session_trend", "2026-07-14", "2026-07-16",
-        {"services": list(_SERVICES)}, {}, "sd_2ab5ec25e750dda2")
+        {"services": list(_SERVICES)}, {}, "sd_68461a6e4fc6ccac")
     # headline 에 세션 수가 있고, viz 는 라인 차트 스펙이다.
     assert out["headline"], "headline 이 비면 안 된다"
     assert out["viz"]["encoding"]["x"] is not None
