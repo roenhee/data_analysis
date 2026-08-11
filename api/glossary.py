@@ -267,6 +267,11 @@ def metric_help(key: str) -> str:
 
 
 def column_label(col: str) -> str:
+    # 비교 모드의 날짜별 델타 컬럼(delta_<metric>)은 "Δ <지표 한글>" 로 푼다.
+    if col.startswith("delta_"):
+        base = col[len("delta_"):]
+        inner = COLUMNS.get(base, METRICS.get(base, (base, "")))[0]
+        return f"Δ {inner}"
     return COLUMNS.get(col, (col, ""))[0]
 
 

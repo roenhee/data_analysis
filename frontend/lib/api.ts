@@ -79,3 +79,25 @@ export async function fetchAnalysis(
   if (!r.ok) throw new Error(`GET /api/analysis/${name} → ${r.status}`)
   return r.json()
 }
+
+export interface CompareBlock {
+  on: string
+  a: string
+  b: string
+  weight_skew: number
+  date_reason: string
+  sign_disagrees: boolean
+  dates_used: string[]
+}
+export interface CompareResult extends AnalysisResult {
+  compare: CompareBlock
+}
+
+export async function fetchCompare(
+  name: string,
+  params: Record<string, string | string[]>,
+): Promise<CompareResult> {
+  const r = await fetch(`${API}/compare/${name}?${buildQuery(params)}`)
+  if (!r.ok) throw new Error(`GET /api/compare/${name} → ${r.status}`)
+  return r.json()
+}

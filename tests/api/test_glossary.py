@@ -53,6 +53,12 @@ def test_axis_value_label():
     assert axis_help("os") != ""
 
 
+def test_column_label_delta_prefix():
+    # 비교 모드 델타 컬럼은 "Δ <지표 한글>" 로 푼다.
+    assert column_label("delta_seconds_per_session").startswith("Δ ")
+    assert "delta_" not in column_label("delta_seconds_per_session")
+
+
 def test_param_label():
     assert param_label("damping") == "감쇠 계수"
     assert param_help("damping") != ""

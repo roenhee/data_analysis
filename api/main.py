@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from analytics.analyses.base import UnknownAnalysisError
 from api import filters, params
-from api import analysis, cube_store, meta
+from api import analysis, compare, cube_store, meta
 
 app = FastAPI(title="Markov 대시보드 API")
 
@@ -55,4 +55,31 @@ def get_analysis_result(name: str, request: Request, start: str, end: str):
         # 잘못된 클라이언트 입력(기간 역전·기간 상한 초과·날짜 형식 오류·파라미터 타입
         # 오류)은 전부 ValueError 로 올라온다 — 400 으로 매핑한다(500 이 아니다).
         # PeriodTooLongError 도 ValueError 하위 클래스라 여기 걸린다.
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/compare/{name}")
+def get_compare_result(name: str, request: Request, start: str, end: str,
+                       on: str, a: str, b: str):
+    """`on` 축의 두 값(a·b)을 비교한다. on 은 세그먼트 축, a·b 는 그 값."""
+    segment = {"services": meta.SERVICES, "dates": [start, end]}
+    for axis in filters.SEGMENT_AXES:
+        values = request.query_params.getlist(axis)
+        if values:
+            segment[axis] = values
+
+    reserved = {"start", "end", "on", "a", "b"} | set(filters.SEGMENT_AXES)
+    param_values = {k: v for k, v in request.query_params.items() if k not in reserved}
+
+    missing = [n for n in params.required_names(name) if n not in param_values]
+    if missing:
+        raise HTTPException(400, f"필수 파라미터를 선택하세요: {', '.join(missing)}")
+
+    try:
+        return compare.run_compare(
+            name, start, end, segment, on, a, b, param_values,
+            meta.STATE_DICT_VERSION)
+    except UnknownAnalysisError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

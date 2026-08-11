@@ -12,10 +12,16 @@ export interface DashState {
   segments: Record<string, string[]> // 세그먼트 축 → 선택 값들(다중, 빈 배열=전체)
   params: Record<string, string> // 분석 파라미터 → 값
   page: number
+  mode: "single" | "compare" // 헤더 단일/비교
+  cmpOn: string // 비교 축(세그먼트 축 하나)
+  cmpA: string // 비교 A 값
+  cmpB: string // 비교 B 값
 }
 
-// tab·analysis·start·end·page 는 프론트 상태다. 세그먼트 축과 파라미터는 백엔드로도 간다.
-const RESERVED = new Set(["tab", "analysis", "start", "end", "page"])
+// 프론트 전용 상태 키(백엔드 세그먼트/파라미터가 아니다).
+const RESERVED = new Set([
+  "tab", "analysis", "start", "end", "page", "mode", "on", "a", "b",
+])
 
 /** 어떤 분석이 어느 탭에 속하는지. 없으면 첫 탭. */
 export function tabOfAnalysis(meta: Meta, analysis: string): string {
@@ -80,7 +86,19 @@ export function initialState(meta: Meta, search: string): DashState {
   const withDefaults = defaultParams(meta, analysis, params)
 
   const page = Math.max(1, Number(q.get("page") ?? "1") || 1)
-  return { tab, analysis, start, end, segments, params: withDefaults, page }
+
+  const mode = q.get("mode") === "compare" ? "compare" : "single"
+  // 비교 축 기본값: 첫 세그먼트 축의 두 값(A·B 는 달라야 뜻이 있다).
+  const firstAxis = meta.segments[0]
+  const cmpOn = q.get("on") ?? firstAxis?.axis ?? ""
+  const axisVals = meta.segments.find((s) => s.axis === cmpOn)?.values ?? []
+  const cmpA = q.get("a") ?? axisVals[0] ?? ""
+  const cmpB = q.get("b") ?? axisVals[1] ?? axisVals[0] ?? ""
+
+  return {
+    tab, analysis, start, end, segments, params: withDefaults, page,
+    mode, cmpOn, cmpA, cmpB,
+  }
 }
 
 /** 상태 → URL query 문자열(공유용). 세그먼트는 반복 키, 파라미터는 key=value. */
@@ -97,7 +115,31 @@ export function toQuery(state: DashState): string {
     if (value !== "") q.set(name, value)
   }
   if (state.page > 1) q.set("page", String(state.page))
+  if (state.mode === "compare") {
+    q.set("mode", "compare")
+    q.set("on", state.cmpOn)
+    q.set("a", state.cmpA)
+    q.set("b", state.cmpB)
+  }
   return q.toString()
+}
+
+/** 비교 요청 파라미터: start·end·on·a·b + (비교 축 제외) 세그먼트 + 파라미터. */
+export function toCompareParams(state: DashState): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = {
+    start: state.start,
+    end: state.end,
+    on: state.cmpOn,
+    a: state.cmpA,
+    b: state.cmpB,
+  }
+  for (const [axis, vals] of Object.entries(state.segments)) {
+    if (axis !== state.cmpOn && vals.length) out[axis] = vals
+  }
+  for (const [name, value] of Object.entries(state.params)) {
+    if (value !== "") out[name] = value
+  }
+  return out
 }
 
 /** 분석 요청에 보낼 파라미터만(백엔드 계약: start·end·세그먼트 반복·파라미터). tab·page 는
