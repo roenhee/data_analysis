@@ -12,7 +12,7 @@ import pandas as pd
 
 from analytics.analyses.base import AnalysisResult, get_analysis
 from api import cube_store
-from dashboard import charts, filters, glossary, params, render
+from api import charts, filters, glossary, params, render
 
 CHART_TOP = 20   # 차트에 그릴 상위 개수(막대 수천 개 방지). 표는 전량.
 

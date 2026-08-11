@@ -1,7 +1,7 @@
 import pandas as pd
 
 from analytics.analyses.base import CubeSet
-from dashboard.filters import cube_names_for, apply_segment, expand_dates
+from api.filters import cube_names_for, apply_segment, expand_dates
 
 
 def test_expand_dates_fills_the_range():

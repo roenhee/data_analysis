@@ -13,7 +13,7 @@ from datetime import date
 from analytics.analyses.base import CubeSet
 from analytics.analyses.cubes import load_cube_set
 from api.byte_cache import ByteBudgetCache
-from dashboard.filters import expand_dates  # 순수 함수 재사용(st 의존 없음)
+from api.filters import expand_dates  # 순수 함수 재사용(st 의존 없음)
 from data_layer.config import Config
 
 SOFT_LIMIT_DAYS = 31   # 초과 시 경고(막지 않음)

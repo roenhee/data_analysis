@@ -1,6 +1,6 @@
 import pandas as pd
 
-from dashboard.render import headline_cards, page_slice, envelope_summary
+from api.render import headline_cards, page_slice, envelope_summary
 
 
 def test_headline_cards_format_label_value():

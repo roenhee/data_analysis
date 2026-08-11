@@ -1,4 +1,4 @@
-from dashboard.params import Param, coerce, params_for, required_names
+from api.params import Param, coerce, params_for, required_names
 
 
 def test_path_ranking_requires_n():

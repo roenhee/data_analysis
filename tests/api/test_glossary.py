@@ -1,4 +1,4 @@
-from dashboard.glossary import (
+from api.glossary import (
     analysis_desc,
     analysis_label,
     axis_help,

@@ -1,6 +1,6 @@
 import pandas as pd
 
-from dashboard.charts import chart_kind, bar_chart, line_chart, heatmap_chart, graph_dot
+from api.charts import chart_kind, bar_chart, line_chart, heatmap_chart, graph_dot
 
 
 def test_chart_kind_reads_viz():

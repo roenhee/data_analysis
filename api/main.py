@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from analytics.analyses.base import UnknownAnalysisError
-from dashboard import filters, params
+from api import filters, params
 from api import analysis, cube_store, meta
 
 app = FastAPI(title="Markov 대시보드 API")

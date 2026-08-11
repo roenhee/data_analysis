@@ -10,7 +10,7 @@ from datetime import date
 
 from analytics.analyses.base import CubeSet, list_analyses
 from analytics.analyses.cubes import load_cube_set
-from dashboard import filters, glossary, params
+from api import filters, glossary, params
 from data_layer.config import Config
 
 # 정본 빌드(spec 2026-08-06 "정본 빌드 선택"): 7서비스(agorax 포함) 22일 완성본
@@ -89,6 +89,29 @@ def _present_dates() -> list[str]:
     return sorted(str(d) for d in cubes.present_dates)
 
 
+@functools.lru_cache(maxsize=1)
+def _present_screens() -> list[str]:
+    """전이 큐브의 화면 상태 목록(START/EXIT 제외). reachability 의 source/target 선택용.
+
+    상태 집합은 state 사전이 빌드 전에 고정하므로 날짜 간에 안 흔들린다 — 마지막 빌드일
+    하루만 읽어 unique 를 낸다(전 기간 로드 불필요). lru_cache 로 프로세스당 한 번.
+    """
+    dates = _present_dates()
+    if not dates:
+        return []
+    cubes = load_cube_set(
+        Config.from_env(), dates=[dates[-1]],
+        services=SERVICES, state_dict_version=STATE_DICT_VERSION,
+        cube_names=("transition",), require_complete=False,
+    )
+    t = cubes.transition
+    if t is None or t.empty:
+        return []
+    states = set(t["from_state"]) | set(t["to_state"])
+    states -= {"START", "EXIT"}
+    return sorted(str(s) for s in states)
+
+
 def build_meta() -> dict:
     return {
         "tabs": [{"key": k, "label": v, "analyses": TABS[k]}
@@ -97,6 +120,7 @@ def build_meta() -> dict:
         "segments": _segments(),
         "present_dates": _present_dates(),
         "present_services": list(SERVICES),
+        "present_screens": _present_screens(),
         "defaults": {"analysis": "session_trend",
                      "state_dict_version": STATE_DICT_VERSION},
     }
