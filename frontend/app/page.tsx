@@ -8,6 +8,7 @@ import { ResultCards } from "@/components/ResultCards"
 import { ResultTable } from "@/components/ResultTable"
 import { ResultChart } from "@/components/ResultChart"
 import { Envelope } from "@/components/Envelope"
+import { ResultSkeleton } from "@/components/ResultSkeleton"
 import {
   buildQuery,
   fetchAnalysis,
@@ -127,22 +128,29 @@ export default function Home() {
                 )}
               </div>
               {error && <p className="text-red-600">에러: {error}</p>}
+              {!result && !error && fetching && <ResultSkeleton />}
               {result && (
-                <>
-                  <Envelope envelope={result.envelope} />
-                  <ResultCards headline={result.headline} />
-                  <ResultChart
-                    viz={result.viz}
-                    columns={result.columns}
-                    rows={result.rows}
-                  />
-                  <ResultTable
-                    columns={result.columns}
-                    rows={result.rows}
-                    page={dash.page}
-                    onPageChange={(p) => update({ page: p })}
-                  />
-                </>
+                <div
+                  className={
+                    fetching ? "pointer-events-none opacity-50 transition-opacity" : ""
+                  }
+                >
+                  <div className="space-y-4">
+                    <Envelope envelope={result.envelope} />
+                    <ResultCards headline={result.headline} />
+                    <ResultChart
+                      viz={result.viz}
+                      columns={result.columns}
+                      rows={result.rows}
+                    />
+                    <ResultTable
+                      columns={result.columns}
+                      rows={result.rows}
+                      page={dash.page}
+                      onPageChange={(p) => update({ page: p })}
+                    />
+                  </div>
+                </div>
               )}
             </main>
           </div>
