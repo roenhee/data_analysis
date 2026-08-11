@@ -33,8 +33,13 @@ def _where(window: tuple[str, str], services: list[str], extra: list[str]) -> st
 
 
 def _count_sql(table, window, services, value_expr, extra) -> str:
+    # 채택 가중 = **고유 세션 수**(`approx_distinct(세션키)`), `count(*)`(이벤트 행) 아님.
+    # 행수 가중은 허브 화면 재방문·미플래그 반복을 부풀려 소규모 서비스를 굶긴다(측정:
+    # docs/superpowers/measurements/2026-08-11-state-dict-weighting.md). 세션키=(uuid,suid);
+    # BASE_FILTERS 가 둘의 non-null 을 보장하므로 concat 이 안전하다. is_invalid 봇은 이미 제외.
     return (
-        f"SELECT {value_expr} AS value, count(*) AS cnt\n"
+        f"SELECT {value_expr} AS value,\n"
+        "  approx_distinct(user.uuid || '|' || user.suid) AS cnt\n"
         f"FROM {table}\n"
         f"WHERE {_where(window, services, extra)}\n"
         "GROUP BY 1\n"
