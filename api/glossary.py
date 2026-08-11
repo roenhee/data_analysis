@@ -241,6 +241,22 @@ AXIS_VALUE_LABELS: dict[str, dict[str, str]] = {
     "app_version": {"other": "기타"},
 }
 
+# 파라미터 이름 → (한글 라벨, 마우스오버 설명). 사이드바 파라미터 드롭다운 표시용.
+PARAMS: dict[str, tuple[str, str]] = {
+    "source": ("출발 화면", "도달 확률을 잴 시작 화면입니다."),
+    "target": ("도착 화면", "여기에 도달할 확률을 잽니다."),
+    "max_k": ("최대 걸음 수", "몇 걸음 안에 도달하는지까지 볼지입니다."),
+    "n": ("경로 길이(n)", "몇 개 화면을 이은 경로를 볼지입니다(n-그램)."),
+    "by": ("분류 기준", "클릭을 무엇으로 나눠 볼지입니다."),
+    "exit_within": ("이탈 구간", "몇 걸음 안의 이탈을 함께 볼지입니다(비우면 보지 않음)."),
+    "damping": ("감쇠 계수", "PageRank 감쇠 계수입니다(보통 0.85)."),
+    "warn_below": ("체류 경고 임계", "이 값보다 낮은 체류를 경고로 표시합니다."),
+    "seed": ("난수 시드", "군집 탐색의 난수 시드입니다(재현용)."),
+    "resolution": ("군집 해상도", "군집을 얼마나 잘게 나눌지입니다(클수록 잘게)."),
+    "top_per_community": ("군집별 상위 개수", "군집마다 상위 몇 개 경로를 볼지입니다."),
+    "screen": ("중심 화면", "이웃을 볼 중심 화면입니다(비우면 PageRank 최상위)."),
+}
+
 
 def metric_label(key: str) -> str:
     return METRICS.get(key, (key, ""))[0]
@@ -291,3 +307,11 @@ def axis_value_label(axis: str, value: str) -> str:
     if value == "":
         return "전체"
     return AXIS_VALUE_LABELS.get(axis, {}).get(value, value)
+
+
+def param_label(name: str) -> str:
+    return PARAMS.get(name, (name, ""))[0]
+
+
+def param_help(name: str) -> str:
+    return PARAMS.get(name, (name, ""))[1]

@@ -45,7 +45,7 @@ export function Sidebar({
   }
 
   return (
-    <aside className="w-56 shrink-0 space-y-4 border-r p-3">
+    <aside className="w-full shrink-0 space-y-4 border-b p-3 md:w-56 md:border-r md:border-b-0">
       <div className="space-y-1">
         {meta.tabs.map((t) => (
           <button
@@ -93,8 +93,11 @@ export function Sidebar({
             const options = p.kind === "screen" ? meta.present_screens : p.choices
             return (
               <label key={p.name} className="block space-y-1">
-                <span className="px-1 text-xs text-muted-foreground">
-                  {p.name}
+                <span
+                  className="px-1 text-xs text-muted-foreground"
+                  title={p.help ?? undefined}
+                >
+                  {p.label || p.name}
                   {p.required && <span className="text-red-500"> *</span>}
                 </span>
                 <select

@@ -4,6 +4,8 @@
 
 export interface ParamSpec {
   name: string
+  label: string
+  help: string | null
   kind: string
   required: boolean
   choices: string[]

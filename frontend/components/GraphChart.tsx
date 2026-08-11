@@ -51,7 +51,41 @@ export function GraphChart({
         { name: "nodeRadius", value: 9 },
         { name: "nodeCharge", value: -45 },
         { name: "linkDistance", value: 55 },
-        { name: "static", value: true },
+        // static=false 라 시뮬레이션이 돌아 노드가 자리를 잡고, 드래그로 옮길 수 있다.
+        { name: "static", value: false },
+        {
+          // 드래그 중인 노드의 고정 상태(공식 Vega force 예제 패턴).
+          name: "fix",
+          value: false,
+          on: [
+            {
+              events: "symbol:pointerout[!event.buttons], window:pointerup",
+              update: "false",
+            },
+            { events: "symbol:pointerover", update: "fix || true" },
+            {
+              events:
+                "[symbol:pointerdown, window:pointerup] > window:pointermove!",
+              update: "xy()",
+              force: true,
+            },
+          ],
+        },
+        {
+          name: "node",
+          value: null,
+          on: [
+            {
+              events: "symbol:pointerover",
+              update: "fix === true ? item() : node",
+            },
+          ],
+        },
+        {
+          name: "restart",
+          value: false,
+          on: [{ events: { signal: "fix" }, update: "fix && fix.length" }],
+        },
       ],
       scales: [
         {
@@ -100,6 +134,15 @@ export function GraphChart({
           type: "symbol",
           zindex: 1,
           from: { data: "node-data" },
+          on: [
+            {
+              trigger: "fix",
+              modify: "node",
+              values:
+                "fix === true ? {fx: node.x, fy: node.y} : {fx: fix[0], fy: fix[1]}",
+            },
+            { trigger: "!fix", modify: "node", values: "{fx: null, fy: null}" },
+          ],
           encode: {
             enter: {
               fill: { scale: "color", field: "group" },
@@ -112,14 +155,14 @@ export function GraphChart({
             },
             update: {
               size: { scale: "size", field: "degree" },
-              x: { field: "x" },
-              y: { field: "y" },
+              cursor: { value: "pointer" },
             },
           },
           transform: [
             {
               type: "force",
               iterations: 300,
+              restart: { signal: "restart" },
               static: { signal: "static" },
               signal: "force",
               forces: [

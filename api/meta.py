@@ -67,7 +67,9 @@ def _analysis_catalog() -> list[dict]:
             "label": glossary.analysis_label(name),
             "help": glossary.analysis_desc(name) or None,
             "params": [
-                {"name": p.name, "kind": p.kind, "required": p.required,
+                {"name": p.name, "label": glossary.param_label(p.name),
+                 "help": glossary.param_help(p.name) or None,
+                 "kind": p.kind, "required": p.required,
                  "choices": [str(c) for c in p.choices]}
                 for p in specs
             ],

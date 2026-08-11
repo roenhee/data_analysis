@@ -113,7 +113,7 @@ export default function Home() {
           )}
         </main>
       ) : (
-        <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 flex-1 flex-col md:flex-row">
           <Sidebar meta={meta} state={dash} onChange={update} />
           <div className="flex min-w-0 flex-1 flex-col">
             <ControlBar meta={meta} state={dash} onChange={update} />

@@ -7,6 +7,8 @@ from api.glossary import (
     column_label,
     metric_help,
     metric_label,
+    param_help,
+    param_label,
     value_label,
     warning_label,
 )
@@ -49,3 +51,11 @@ def test_axis_value_label():
     assert axis_value_label("service_type", "") == "전체"
     assert axis_value_label("os", "unknown_os") == "unknown_os"
     assert axis_help("os") != ""
+
+
+def test_param_label():
+    assert param_label("damping") == "감쇠 계수"
+    assert param_help("damping") != ""
+    # 모르는 파라미터는 이름 그대로, 설명은 빈 문자열.
+    assert param_label("unknown_param") == "unknown_param"
+    assert param_help("unknown_param") == ""
