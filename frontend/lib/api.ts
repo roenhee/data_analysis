@@ -20,6 +20,7 @@ export interface Meta {
   segments: { axis: string; label: string; values: string[] }[]
   present_dates: string[]
   present_services: string[]
+  present_screens: string[]
   defaults: { analysis: string; state_dict_version: string }
 }
 
